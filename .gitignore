@@ -1,0 +1,19 @@
+# ROS2 build
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+
+# ROS2 cache
+.colcon/
+
+# IDE
+.vscode/
+.idea/
+
+# Linux
+*.swp
+.DS_Store

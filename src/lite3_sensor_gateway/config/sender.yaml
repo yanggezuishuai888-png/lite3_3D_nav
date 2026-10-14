@@ -1,0 +1,20 @@
+lite3_gateway_sender:
+  ros__parameters:
+    bind_ip: "10.42.0.2"
+    pc_ip: "10.42.0.1"
+    telemetry_port: 45001
+    image_port: 45003
+    enable_depth: true
+    compress_depth: true
+    image_max_mbps: 30.0
+    depth_max_hz: 15.0
+    depth_scale_m: 0.001
+    motion_clock_domain: 1  # 0=unknown, 1=steady, 2=system; source driver uses steady
+    camera_clock_domain: 0
+    imu_topic: /imu/data
+    odom_topic: /leg_odom2
+    ultrasound_topic: /us_publisher/ultrasound_distance
+    handle_topic: /handle_state
+    status_prefix: /sensor_status
+    depth_topic: /camera/depth/image_rect_raw
+    camera_info_topic: /camera/depth/camera_info

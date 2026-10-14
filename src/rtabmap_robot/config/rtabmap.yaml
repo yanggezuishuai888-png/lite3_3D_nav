@@ -1,0 +1,114 @@
+/rtabmap/rtabmap:
+  ros__parameters:
+
+    ############################
+    # ROS接口参数
+    ############################
+
+    frame_id: "camera_link"
+
+    odom_frame_id: "odom"
+
+    map_frame_id: "map"
+
+
+    subscribe_rgb: true
+
+    subscribe_depth: true
+
+    subscribe_rgbd: false
+
+
+    approx_sync: true
+
+
+    queue_size: 10
+
+
+
+    ############################
+    # 数据库
+    ############################
+
+    database_path: "/home/ruming/ros2_ws/src/rtabmap_robot/db/rtabmap.db"
+
+
+
+    ############################
+    # 视觉里程计
+    ############################
+
+    Odom/Strategy: "0"
+
+
+    # 特征最少数量
+    Vis/MinInliers: "15"
+
+
+    # 特征检测器
+    # 6 = GFTT
+    Kp/DetectorStrategy: "6"
+
+
+
+    ############################
+    # RGB-D SLAM
+    ############################
+
+
+    # 使用RGB-D
+    RGBD/NeighborLinkRefining: "true"
+
+
+    # 空间近邻检测
+    RGBD/ProximityBySpace: "true"
+
+
+
+    ############################
+    # 回环检测
+    ############################
+
+
+    Mem/IncrementalMemory: "true"
+
+
+    Mem/InitWMWithAllNodes: "false"
+
+
+
+    ############################
+    # 图优化
+    ############################
+
+
+    RGBD/OptimizeFromGraphEnd: "false"
+
+
+
+    ############################
+    # 建图
+    ############################
+
+
+    Grid/FromDepth: "true"
+
+
+    # 栅格大小5cm
+    Grid/CellSize: "0.05"
+
+
+    # 最大障碍距离
+    Grid/RangeMax: "5.0"
+
+
+
+    ############################
+    # 点云
+    ############################
+
+
+    RGBD/ProximityPathMaxNeighbors: "0"
+
+
+    Reg/Strategy: "0"

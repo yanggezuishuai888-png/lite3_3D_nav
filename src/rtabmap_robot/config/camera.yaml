@@ -1,0 +1,37 @@
+camera:
+  ros__parameters:
+
+    # RGB图像topic
+    rgb_topic: "/camera/rgb/image_color"
+
+    # 深度图topic
+    depth_topic: "/camera/depth/image"
+
+    # 相机内参
+    camera_info_topic: "/camera/rgb/camera_info"
+
+
+    # TF中相机坐标系名称
+    frame_id: "camera_link"
+
+
+    # 时间同步
+    approx_sync: true
+
+    # TUM RGB-D官方推荐的最大RGB/深度时间差（秒）
+    approx_sync_max_interval: 0.02
+
+    # 同步队列大小
+    queue_size: 10
+
+
+    # 使用RGB-D输入
+    subscribe_rgb: true
+
+    subscribe_depth: true
+
+    subscribe_rgbd: false
+
+
+    # 深度图是否已经和彩色图对齐
+    depth_aligned: true

@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>lite3_sensor_gateway</name>
+  <version>0.1.0</version>
+  <description>Read-only, versioned UDP sensor gateway between Lite3 Foxy and PC Jazzy.</description>
+  <maintainer email="ysc@example.com">ysc</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>zlib</depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

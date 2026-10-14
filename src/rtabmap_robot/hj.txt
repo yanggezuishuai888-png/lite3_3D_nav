@@ -1,0 +1,4 @@
+env -i \
+  HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" TERM="$TERM" \
+  PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  /bin/bash --noprofile --norc

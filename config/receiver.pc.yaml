@@ -1,0 +1,9 @@
+lite3_gateway_receiver:
+  ros__parameters:
+    bind_ip: "10.42.0.1"
+    sender_ip: "10.42.0.2"
+    telemetry_port: 45001
+    image_port: 45003
+    output_prefix: /lite3
+    timestamp_policy: receive
+    stale_timeout: 2.5
