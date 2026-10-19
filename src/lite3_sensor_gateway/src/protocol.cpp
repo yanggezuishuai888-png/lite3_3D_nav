@@ -7,7 +7,7 @@
 namespace lite3_gateway {
 bool valid_type(Type t) {
   auto n = static_cast<uint8_t>(t);
-  return (n >= 1 && n <= 11) || (n >= 16 && n <= 22);
+  return (n >= 1 && n <= 22);
 }
 const char *type_name(Type t) {
   switch (t) {
@@ -33,6 +33,14 @@ const char *type_name(Type t) {
     return "color_info";
   case Type::AlignedInfo:
     return "aligned_info";
+  case Type::TimeRequest:
+    return "time_request";
+  case Type::TimeResponse:
+    return "time_response";
+  case Type::ClockStatus:
+    return "clock_status";
+  case Type::CameraTf:
+    return "camera_tf";
   default:
     return "sensor_status";
   }
@@ -52,7 +60,7 @@ std::vector<Bytes> fragment(const Envelope &e, const Bytes &payload) {
     size_t offset = i * kChunkSize, len = std::min(kChunkSize, payload.size() - offset);
     Writer w;
     w.u32(0x4c334757);
-    w.u8(1);
+    w.u8(2);
     w.u8(static_cast<uint8_t>(e.type));
     w.u8(static_cast<uint8_t>(e.clock));
     w.u8(e.flags);
@@ -60,6 +68,7 @@ std::vector<Bytes> fragment(const Envelope &e, const Bytes &payload) {
     w.u64(e.sequence);
     w.u64(e.sent_ns);
     w.u64(e.source_ns);
+    w.u64(e.raw_source_ns);
     w.u32(payload.size());
     w.u32(crc);
     w.u16(i);
@@ -76,7 +85,7 @@ Fragment parse_fragment(const Bytes &packet) {
     throw std::runtime_error("invalid datagram size");
   Reader r(packet);
   Fragment f;
-  if (r.u32() != 0x4c334757 || r.u8() != 1)
+  if (r.u32() != 0x4c334757 || r.u8() != 2)
     throw std::runtime_error("unknown protocol");
   f.env.type = static_cast<Type>(r.u8());
   f.env.clock = static_cast<ClockDomain>(r.u8());
@@ -85,6 +94,7 @@ Fragment parse_fragment(const Bytes &packet) {
   f.env.sequence = r.u64();
   f.env.sent_ns = r.u64();
   f.env.source_ns = r.u64();
+  f.env.raw_source_ns = r.u64();
   f.total = r.u32();
   f.crc = r.u32();
   f.index = r.u16();
@@ -169,6 +179,7 @@ bool Reassembler::accept(const Fragment &f, double now, Message &out) {
   const auto &a = p.first;
   if (a.total != f.total || a.crc != f.crc || a.count != f.count || a.env.flags != f.env.flags ||
       a.env.clock != f.env.clock || a.env.source_ns != f.env.source_ns ||
+      a.env.raw_source_ns != f.env.raw_source_ns ||
       a.env.sent_ns != f.env.sent_ns)
     throw std::runtime_error("conflicting fragment headers");
   if (p.seen[f.index]) {

@@ -1,5 +1,6 @@
 #include "lite3_sensor_gateway/codecs.hpp"
 #include "lite3_sensor_gateway/net.hpp"
+#include "lite3_sensor_gateway/time_sync.hpp"
 #include <cmath>
 #include <deque>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
@@ -7,6 +8,7 @@
 #include <set>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <tf2_ros/static_transform_broadcaster.h>
 using namespace lite3_gateway;
 /*
 只接收指定 IP 的 UDP，检查数据包并重组图像，发布 /lite3/... ROS 话题。
@@ -15,7 +17,7 @@ using namespace lite3_gateway;
 namespace {
 const char *status_names[] = {"imu", "odom", "odom2", "joint", "ultrasound", "realsense", "lidar"};
 struct Stream {
-  uint64_t sequence = 0, count = 0, gaps = 0, source = 0, sent = 0;
+  uint64_t sequence = 0, count = 0, gaps = 0, source = 0, raw_source = 0, sent = 0;
   double received = 0;
   ClockDomain clock = ClockDomain::Unknown;
 };
@@ -24,10 +26,15 @@ class Receiver : public rclcpp::Node {
   sockaddr_in peer_{};
   Reassembler small_, large_;
   uint64_t session_ = 0, invalid_ = 0, foreign_ = 0, old_ = 0;
+  uint64_t probe_replies_ = 0;
   std::set<uint64_t> retired_;
   std::deque<uint64_t> retired_order_;
   std::map<Type, Stream> streams_;
   bool source_time_, camera_source_time_;
+  bool clock_step_latched_ = false, have_clock_status_ = false, reply_time_probes_ = true;
+  double clock_status_received_ = 0;
+  ClockStatusData clock_status_;
+  TimeMapper local_clock_;
   double stale_;
   std::string prefix_;
   sensor_msgs::msg::CameraInfo info_, color_info_, aligned_info_;
@@ -41,10 +48,30 @@ class Receiver : public rclcpp::Node {
       aligned_calibration_;
   std::vector<rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr> statuses_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr time_valid_;
+  std::shared_ptr<tf2_ros::StaticTransformBroadcaster> camera_tf_broadcaster_;
   rclcpp::TimerBase::SharedPtr poll_, status_timer_;
   template <class M> void timestamp(M &m, bool source) {
     if (!source)
       m.header.stamp = now();
+  }
+  bool time_ready() const {
+    const auto t = steady_seconds();
+    const auto steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               std::chrono::steady_clock::now().time_since_epoch()).count();
+    return !clock_step_latched_ && local_clock_.fresh(steady_ns) &&
+           have_clock_status_ && clock_status_.qualified &&
+           clock_status_.peer_bound_ns <= 5000000 &&
+           clock_status_.mapping_uncertainty_ns <= 2000000 &&
+           clock_status_.probe_age_ns <= 2500000000ULL &&
+           t - clock_status_received_ <= 1.5 &&
+           streams_.count(Type::Heartbeat) &&
+           t - streams_.at(Type::Heartbeat).received < stale_;
+  }
+  void check_source_stamp(const Message &m, const builtin_interfaces::msg::Time &stamp) {
+    if (m.env.clock != ClockDomain::System || !m.env.source_ns ||
+        m.env.source_ns != stamp_ns(stamp))
+      throw std::runtime_error("non-system or mismatched source timestamp");
   }
   void repeat_info(const sensor_msgs::msg::CameraInfo &info, bool have,
                    const rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr &publisher,
@@ -63,22 +90,33 @@ class Receiver : public rclcpp::Node {
       p->publish(b);
   }
   void publish(const Message &m) {
+    if ((m.env.type == Type::Imu || m.env.type == Type::Odom ||
+         m.env.type == Type::Depth || m.env.type == Type::Color ||
+         m.env.type == Type::AlignedDepth || m.env.type == Type::CameraInfo ||
+         m.env.type == Type::ColorInfo || m.env.type == Type::AlignedInfo) && !time_ready())
+      return;
     switch (m.env.type) {
     case Type::Heartbeat: {
       Reader r(m.payload);
-      if (r.string() != "lite3_sensor_gateway/1")
+      if (r.string() != "lite3_sensor_gateway/2")
         throw std::runtime_error("unknown heartbeat");
       r.finish();
       break;
     }
     case Type::Imu: {
       auto v = decode_imu(m.payload);
+      check_source_stamp(m, v.header.stamp);
+      if (!m.env.raw_source_ns)
+        throw std::runtime_error("missing original motion timestamp");
       timestamp(v, source_time_);
       imu_->publish(v);
       break;
     }
     case Type::Odom: {
       auto v = decode_odom(m.payload);
+      check_source_stamp(m, v.header.stamp);
+      if (!m.env.raw_source_ns)
+        throw std::runtime_error("missing original motion timestamp");
       timestamp(v, source_time_);
       odom_->publish(v);
       break;
@@ -94,6 +132,7 @@ class Receiver : public rclcpp::Node {
     }
     case Type::CameraInfo: {
       info_ = decode_info(m.payload);
+      check_source_stamp(m, info_.header.stamp);
       have_info_ = true;
       auto copy = info_;
       timestamp(copy, camera_source_time_);
@@ -102,6 +141,7 @@ class Receiver : public rclcpp::Node {
     }
     case Type::ColorInfo: {
       color_info_ = decode_info(m.payload);
+      check_source_stamp(m, color_info_.header.stamp);
       have_color_info_ = true;
       auto copy = color_info_;
       timestamp(copy, camera_source_time_);
@@ -110,6 +150,7 @@ class Receiver : public rclcpp::Node {
     }
     case Type::AlignedInfo: {
       aligned_info_ = decode_info(m.payload);
+      check_source_stamp(m, aligned_info_.header.stamp);
       have_aligned_info_ = true;
       auto copy = aligned_info_;
       timestamp(copy, camera_source_time_);
@@ -119,6 +160,7 @@ class Receiver : public rclcpp::Node {
     case Type::Depth: {
       double scale;
       auto v = decode_depth(m.env.flags ? decompress_payload(m.payload) : m.payload, scale);
+      check_source_stamp(m, v.header.stamp);
       timestamp(v, camera_source_time_);
       repeat_info(info_, have_info_, calibration_, v);
       std_msgs::msg::Float64 units;
@@ -129,6 +171,7 @@ class Receiver : public rclcpp::Node {
     }
     case Type::Color: {
       auto v = decode_color(m.payload);
+      check_source_stamp(m, v.header.stamp);
       timestamp(v, camera_source_time_);
       repeat_info(color_info_, have_color_info_, color_calibration_, v);
       color_->publish(v);
@@ -137,6 +180,7 @@ class Receiver : public rclcpp::Node {
     case Type::AlignedDepth: {
       double scale;
       auto v = decode_depth(m.env.flags ? decompress_payload(m.payload) : m.payload, scale);
+      check_source_stamp(m, v.header.stamp);
       timestamp(v, camera_source_time_);
       repeat_info(aligned_info_, have_aligned_info_, aligned_calibration_, v);
       std_msgs::msg::Float64 units;
@@ -145,13 +189,54 @@ class Receiver : public rclcpp::Node {
       aligned_depth_->publish(v);
       break;
     }
+    case Type::ClockStatus:
+      clock_status_ = decode_clock_status(m.payload);
+      have_clock_status_ = true;
+      clock_status_received_ = steady_seconds();
+      break;
+    case Type::CameraTf: {
+      auto transforms = decode_camera_tf(m.payload);
+      if (transforms.transforms.size() != 4)
+        throw std::runtime_error("incomplete camera internal TF");
+      for (auto &transform : transforms.transforms)
+        transform.header.stamp = now();
+      camera_tf_broadcaster_->sendTransform(transforms.transforms);
+      break;
+    }
     default: {
+      if (static_cast<int>(m.env.type) < 16)
+        throw std::runtime_error("unexpected control message");
       std_msgs::msg::Bool v;
       v.data = decode_bool(m.payload);
       statuses_.at(static_cast<int>(m.env.type) - 16)->publish(v);
       break;
     }
     }
+  }
+  void respond_time_probe(Socket &socket, const Fragment &f, const sockaddr_in &from,
+                          uint64_t receive_system_ns) {
+    if (!reply_time_probes_ || f.count != 1 || f.total != f.data.size() ||
+        checksum(f.data) != f.crc)
+      return;
+    Reader r(f.data);
+    auto t1 = r.u64();
+    r.finish();
+    if (t1 != f.env.source_ns || f.env.clock != ClockDomain::System)
+      throw std::runtime_error("invalid time probe");
+    Envelope e;
+    e.type = Type::TimeResponse;
+    e.session = f.env.session;
+    e.sequence = f.env.sequence;
+    e.source_ns = t1;
+    e.clock = ClockDomain::System;
+    Writer w;
+    w.u64(t1);
+    w.u64(receive_system_ns);
+    const auto t3 = system_ns();
+    w.u64(t3);
+    e.sent_ns = t3;
+    if (socket.send(fragment(e, w.data).front(), from))
+      ++probe_replies_;
   }
   void receive(Socket &socket, bool image) {
     // Bound work per executor tick so diagnostics cannot be starved by a flooded socket.
@@ -166,12 +251,19 @@ class Receiver : public rclcpp::Node {
           ++invalid_;
         break;
       }
+      const auto receive_system_ns = system_ns();
       if (from.sin_addr.s_addr != peer_.sin_addr.s_addr) {
         ++foreign_;
         continue;
       }
       try {
         auto f = parse_fragment(Bytes(buffer, buffer + n));
+        if (!image && f.env.type == Type::TimeRequest) {
+          respond_time_probe(socket, f, from, receive_system_ns);
+          continue;
+        }
+        if (f.env.type == Type::TimeResponse)
+          throw std::runtime_error("unexpected time response");
         if (image != is_image(f.env.type))
           throw std::runtime_error("wrong channel");
         // All non-image streams fit a datagram. Reject bogus huge telemetry allocations.
@@ -198,6 +290,8 @@ class Receiver : public rclcpp::Node {
           small_.clear();
           large_.clear();
           streams_.clear();
+          have_clock_status_ = false;
+          clock_status_received_ = 0;
           have_info_ = false;
           have_color_info_ = false;
           have_aligned_info_ = false;
@@ -217,6 +311,7 @@ class Receiver : public rclcpp::Node {
         s.sequence = message.env.sequence;
         ++s.count;
         s.source = message.env.source_ns;
+        s.raw_source = message.env.raw_source_ns;
         s.sent = message.env.sent_ns;
         s.clock = message.env.clock;
         s.received = steady_seconds();
@@ -234,6 +329,15 @@ class Receiver : public rclcpp::Node {
   }
   void report() {
     auto t = steady_seconds();
+    const auto before = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count();
+    const auto wall = system_ns();
+    const auto after = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (local_clock_.update(before, wall, after)) {
+      clock_step_latched_ = true;
+      RCLCPP_ERROR(get_logger(), "PC system clock stepped; restart receiver after time sync");
+    }
     small_.expire(t);
     large_.expire(t);
     diagnostic_msgs::msg::DiagnosticArray array;
@@ -243,8 +347,22 @@ class Receiver : public rclcpp::Node {
     link.hardware_id = "lite3_udp";
     bool online =
         streams_.count(Type::Heartbeat) && t - streams_.at(Type::Heartbeat).received < stale_;
-    link.level = online ? 1 : 2;
-    link.message = online ? "UDP online; clocks/TF NOT validated" : "No recent sender heartbeat";
+    const bool valid_time = online && local_clock_.fresh(after) && time_ready();
+    std_msgs::msg::Bool valid;
+    valid.data = valid_time;
+    time_valid_->publish(valid);
+    link.level = valid_time ? 0 : (online ? 1 : 2);
+    link.message = valid_time ? "Clock qualified; dynamic TF pending" :
+                   online ? "Clock unqualified; fusion topics withheld" : "No recent sender heartbeat";
+    value(link, "time_valid", valid_time ? "true" : "false");
+    value(link, "clock_step_latched", clock_step_latched_ ? "true" : "false");
+    value(link, "peer_offset_ns", std::to_string(clock_status_.peer_offset_ns));
+    value(link, "peer_bound_ns", std::to_string(clock_status_.peer_bound_ns));
+    value(link, "peer_rtt_ns", std::to_string(clock_status_.peer_rtt_ns));
+    value(link, "mapping_uncertainty_ns", std::to_string(clock_status_.mapping_uncertainty_ns));
+    value(link, "probe_age_ns", std::to_string(clock_status_.probe_age_ns));
+    value(link, "sender_clock_jumps", std::to_string(clock_status_.clock_jumps));
+    value(link, "probe_replies", std::to_string(probe_replies_));
     value(link, "timestamp_policy",
           source_time_ ? "source (requires synchronized source clock)"
                        : "receive (not measurement time)");
@@ -258,7 +376,7 @@ class Receiver : public rclcpp::Node {
     value(link, "assembly_evicted", std::to_string(small_.evicted + large_.evicted));
     value(link, "assembly_bytes", std::to_string(small_.allocated() + large_.allocated()));
     array.status.push_back(link);
-    for (int id : {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 19, 20, 21, 22}) {
+    for (int id : {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, 16, 17, 18, 19, 20, 21, 22}) {
       auto type = static_cast<Type>(id);
       auto it = streams_.find(type);
       bool fresh = it != streams_.end() && t - it->second.received < stale_;
@@ -272,6 +390,7 @@ class Receiver : public rclcpp::Node {
         auto &v = it->second;
         value(s, "age_seconds", std::to_string(t - v.received));
         value(s, "source_stamp_ns", std::to_string(v.source));
+        value(s, "raw_source_stamp_ns", std::to_string(v.raw_source));
         value(s, "source_clock_domain", std::to_string(static_cast<int>(v.clock)));
         value(s, "sender_system_ns", std::to_string(v.sent));
         value(s, "received", std::to_string(v.count));
@@ -300,7 +419,7 @@ public:
     prefix_ = declare_parameter<std::string>("output_prefix", "/lite3");
     if (prefix_.empty() || prefix_[0] != '/' || prefix_.back() == '/')
       throw std::runtime_error("output_prefix must be absolute with no trailing slash");
-    auto policy = declare_parameter<std::string>("timestamp_policy", "receive");
+    auto policy = declare_parameter<std::string>("timestamp_policy", "source");
     if (policy != "receive" && policy != "source")
       throw std::runtime_error("invalid timestamp policy");
     source_time_ = policy == "source";
@@ -308,6 +427,9 @@ public:
     if (camera_policy != "receive" && camera_policy != "source")
       throw std::runtime_error("invalid camera timestamp policy");
     camera_source_time_ = camera_policy == "source";
+    if (!source_time_ || !camera_source_time_)
+      throw std::runtime_error("time sync requires source timestamp policies");
+    reply_time_probes_ = declare_parameter<bool>("reply_time_probes", true);
     peer_ = address(sender, 0);
     telemetry_.reset(new Socket(bind, tp));
     images_.reset(new Socket(bind, ip));
@@ -337,6 +459,9 @@ public:
           prefix_ + "/sensor_status/" + name + "_isalive", reliable));
     diagnostics_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
         prefix_ + "/gateway/status", rclcpp::QoS(5));
+    time_valid_ = create_publisher<std_msgs::msg::Bool>(
+        prefix_ + "/gateway/time_valid", rclcpp::QoS(1).reliable().transient_local());
+    camera_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
     poll_ = create_wall_timer(std::chrono::milliseconds(2), [this] {
       receive(*telemetry_, false);
       receive(*images_, true);
@@ -344,7 +469,7 @@ public:
     status_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] { report(); });
     RCLCPP_WARN(
         get_logger(),
-        "Read-only receiver; timestamp_policy=%s camera_timestamp_policy=%s; TF and motion-time synchronization pending",
+        "Read-only receiver; timestamp_policy=%s camera_timestamp_policy=%s; fusion gated by clock quality",
         policy.c_str(), camera_policy.c_str());
   }
 };

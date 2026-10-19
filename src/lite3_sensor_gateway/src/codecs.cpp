@@ -1,5 +1,6 @@
 #include "lite3_sensor_gateway/codecs.hpp"
 #include <cmath>
+#include <set>
 /*
 在 ROS 消息与网关协议字段之间转换，保留消息数据和协方差；验证深度图、内参和数值格式。
 */
@@ -256,6 +257,63 @@ sensor_msgs::msg::Image decode_color(const Bytes &b) {
   m.data = r.bytes();
   r.finish();
   validate_color(m);
+  return m;
+}
+bool is_camera_internal_tf(const geometry_msgs::msg::TransformStamped &t) {
+  return (t.header.frame_id == "camera_link" &&
+          (t.child_frame_id == "camera_depth_frame" ||
+           t.child_frame_id == "camera_color_frame")) ||
+         (t.header.frame_id == "camera_depth_frame" &&
+          t.child_frame_id == "camera_depth_optical_frame") ||
+         (t.header.frame_id == "camera_color_frame" &&
+          t.child_frame_id == "camera_color_optical_frame");
+}
+namespace {
+void validate_camera_tf(const geometry_msgs::msg::TransformStamped &t) {
+  const auto &v = t.transform.translation;
+  const auto &q = t.transform.rotation;
+  const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+  if (!is_camera_internal_tf(t) || !std::isfinite(v.x) || !std::isfinite(v.y) ||
+      !std::isfinite(v.z) || !std::isfinite(norm) || norm < 0.9 || norm > 1.1)
+    throw std::runtime_error("invalid camera internal TF");
+}
+} // namespace
+Bytes encode_camera_tf(const tf2_msgs::msg::TFMessage &m) {
+  if (m.transforms.empty() || m.transforms.size() > 4)
+    throw std::runtime_error("invalid camera TF count");
+  Writer w;
+  w.u8(m.transforms.size());
+  std::set<std::string> children;
+  for (const auto &t : m.transforms) {
+    validate_camera_tf(t);
+    if (!children.insert(t.child_frame_id).second)
+      throw std::runtime_error("duplicate camera TF child");
+    w.string(t.header.frame_id);
+    w.string(t.child_frame_id);
+    xyz(w, t.transform.translation);
+    quat(w, t.transform.rotation);
+  }
+  return w.data;
+}
+tf2_msgs::msg::TFMessage decode_camera_tf(const Bytes &b) {
+  Reader r(b);
+  const auto count = r.u8();
+  if (!count || count > 4)
+    throw std::runtime_error("invalid camera TF count");
+  tf2_msgs::msg::TFMessage m;
+  std::set<std::string> children;
+  for (unsigned i = 0; i < count; ++i) {
+    geometry_msgs::msg::TransformStamped t;
+    t.header.frame_id = r.string();
+    t.child_frame_id = r.string();
+    xyz(r, t.transform.translation);
+    quat(r, t.transform.rotation);
+    validate_camera_tf(t);
+    if (!children.insert(t.child_frame_id).second)
+      throw std::runtime_error("duplicate camera TF child");
+    m.transforms.push_back(std::move(t));
+  }
+  r.finish();
   return m;
 }
 } // namespace lite3_gateway

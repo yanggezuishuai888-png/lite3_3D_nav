@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 build = Path(sys.argv[1]).resolve()
+blocked = len(sys.argv) > 2 and sys.argv[2] == 'blocked'
 logs = build / 'integration-logs'
 logs.mkdir(exist_ok=True)
 processes = []
@@ -34,11 +35,12 @@ def start(binary, name, domain, params):
 
 try:
     shared = {'bind_ip': '127.0.0.1', 'telemetry_port': ports[0], 'image_port': ports[1]}
-    receiver = start('receiver', 'receiver', 82, dict(shared, sender_ip='127.0.0.1'))
+    receiver = start('receiver', 'receiver', 82,
+                     dict(shared, sender_ip='127.0.0.1', reply_time_probes='false' if blocked else 'true'))
     sender = start('sender', 'sender', 81,
                    dict(shared, pc_ip='127.0.0.1', enable_color='true',
                         enable_aligned_depth='true', image_max_mbps=200.0))
-    checker = start('integration_fixture', 'checker', 82, {'mode': 'check'})
+    checker = start('integration_fixture', 'checker', 82, {'mode': 'blocked' if blocked else 'check'})
     publisher = start('integration_fixture', 'publisher', 81, {'mode': 'publish'})
     result = checker.wait(timeout=25)
     if sender.poll() is not None or receiver.poll() is not None:

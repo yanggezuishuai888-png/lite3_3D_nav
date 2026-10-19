@@ -1,20 +1,30 @@
+# 狗端配置：默认发往 PC 10.42.0.1，底盘/状态端口 45001，
+# 图像端口 45003，以及输入话题和图像速率。
 lite3_gateway_sender:
   ros__parameters:
     bind_ip: "10.42.0.2"
     pc_ip: "10.42.0.1"
     telemetry_port: 45001
     image_port: 45003
-    enable_depth: true
+    enable_depth: false  # 原始深度可选；建图优先使用对齐深度
+    enable_color: true
+    enable_aligned_depth: true
     compress_depth: true
-    image_max_mbps: 30.0
+    image_max_mbps: 1000.0
     depth_max_hz: 15.0
+    color_max_hz: 15.0
     depth_scale_m: 0.001
     motion_clock_domain: 1  # 0=unknown, 1=steady, 2=system; source driver uses steady
-    camera_clock_domain: 0
+    camera_clock_domain: 2  # 相机驱动输出系统时间
     imu_topic: /imu/data
     odom_topic: /leg_odom2
     ultrasound_topic: /us_publisher/ultrasound_distance
     handle_topic: /handle_state
+    camera_tf_topic: /tf_static  # 仅转发相机内部四条静态变换
     status_prefix: /sensor_status
     depth_topic: /camera/depth/image_rect_raw
     camera_info_topic: /camera/depth/camera_info
+    color_topic: /camera/color/image_raw
+    color_info_topic: /camera/color/camera_info
+    aligned_depth_topic: /camera/aligned_depth_to_color/image_raw
+    aligned_depth_info_topic: /camera/aligned_depth_to_color/camera_info

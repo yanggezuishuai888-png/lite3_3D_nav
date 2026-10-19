@@ -1,4 +1,5 @@
 #include "lite3_sensor_gateway/codecs.hpp"
+#include <array>
 #include <chrono>
 #include <random>
 #include <rclcpp/rclcpp.hpp>
@@ -12,6 +13,48 @@ int main(int argc, char **argv) {
   auto n = std::make_shared<rclcpp::Node>("gateway_test_fixture");
   auto mode = n->declare_parameter<std::string>("mode", "publish");
   auto qos = rclcpp::SensorDataQoS();
+  if (mode == "probe") {
+    std::array<uint64_t, 2> counts{0, 0};
+    std::array<std::set<uint64_t>, 2> unmatched;
+    std::array<std::string, 2> formats;
+    uint64_t pairs = 0;
+    std::vector<rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr> image_subs;
+    auto callback = [&](int index, sensor_msgs::msg::Image::ConstSharedPtr m) {
+      ++counts[index];
+      formats[index] = std::to_string(m->width) + "x" + std::to_string(m->height) + " " +
+                       m->encoding + " " + m->header.frame_id;
+      uint64_t stamp = lite3_gateway::stamp_ns(m->header.stamp);
+      auto &other = unmatched[1 - index];
+      auto match = other.find(stamp);
+      if (match != other.end()) {
+        other.erase(match);
+        ++pairs;
+      } else {
+        auto &current = unmatched[index];
+        current.insert(stamp);
+        if (current.size() > 100)
+          current.erase(current.begin());
+      }
+    };
+    image_subs.push_back(n->create_subscription<sensor_msgs::msg::Image>(
+        "/lite3/camera/color/image_raw", qos,
+        [&](sensor_msgs::msg::Image::ConstSharedPtr m) { callback(0, m); }));
+    image_subs.push_back(n->create_subscription<sensor_msgs::msg::Image>(
+        "/lite3/camera/aligned_depth_to_color/image_raw", qos,
+        [&](sensor_msgs::msg::Image::ConstSharedPtr m) { callback(1, m); }));
+    auto start = steady_clock::now();
+    auto end = start + seconds(15);
+    while (rclcpp::ok() && steady_clock::now() < end) {
+      rclcpp::spin_some(n);
+      std::this_thread::sleep_for(milliseconds(2));
+    }
+    double elapsed = duration<double>(steady_clock::now() - start).count();
+    printf("color=%lu %.1f Hz %s\n", counts[0], counts[0] / elapsed, formats[0].c_str());
+    printf("aligned=%lu %.1f Hz %s\n", counts[1], counts[1] / elapsed, formats[1].c_str());
+    printf("exact_stamp_pairs=%lu\n", pairs);
+    rclcpp::shutdown();
+    return 0;
+  }
   if (mode == "stress") {
     auto color = n->create_publisher<sensor_msgs::msg::Image>("/camera/color/image_raw", qos);
     auto aligned = n->create_publisher<sensor_msgs::msg::Image>(
@@ -62,17 +105,43 @@ int main(int argc, char **argv) {
   }
   std::set<std::string> seen;
   bool stale = false;
+  bool time_valid = false;
+  bool unexpected_tf = false;
   std::vector<rclcpp::SubscriptionBase::SharedPtr> subs;
-  if (mode == "check") {
+  if (mode == "check" || mode == "blocked") {
+    subs.push_back(n->create_subscription<tf2_msgs::msg::TFMessage>(
+        "/tf_static", rclcpp::QoS(10).reliable().transient_local(),
+        [&](tf2_msgs::msg::TFMessage::ConstSharedPtr m) {
+          std::set<std::string> children;
+          for (const auto &t : m->transforms) {
+            if (!lite3_gateway::is_camera_internal_tf(t)) {
+              fprintf(stderr, "unexpected TF edge %s -> %s\n", t.header.frame_id.c_str(),
+                      t.child_frame_id.c_str());
+              unexpected_tf = true;
+              continue;
+            }
+            children.insert(t.child_frame_id);
+          }
+          if (children.size() == 4 && m->transforms.size() == 4)
+            seen.insert("camera_tf");
+        }));
+    subs.push_back(n->create_subscription<std_msgs::msg::Bool>(
+        "/lite3/gateway/time_valid", rclcpp::QoS(1).reliable().transient_local(),
+        [&](std_msgs::msg::Bool::ConstSharedPtr m) { time_valid = m->data; }));
     subs.push_back(n->create_subscription<sensor_msgs::msg::Imu>(
         "/lite3/imu/data", qos, [&](sensor_msgs::msg::Imu::ConstSharedPtr m) {
+          auto stamp = lite3_gateway::stamp_ns(m->header.stamp);
+          auto now = static_cast<uint64_t>(n->get_clock()->now().nanoseconds());
           if (m->angular_velocity.x == 3.25 && m->orientation_covariance[0] == -1 &&
-              m->header.stamp.sec != 123)
+              stamp > now - 2000000000ULL && stamp < now + 100000000ULL)
             seen.insert("imu");
         }));
     subs.push_back(n->create_subscription<nav_msgs::msg::Odometry>(
         "/lite3/leg_odom2", qos, [&](nav_msgs::msg::Odometry::ConstSharedPtr m) {
-          if (m->twist.twist.linear.x == .75 && m->child_frame_id == "base_test")
+          auto stamp = lite3_gateway::stamp_ns(m->header.stamp);
+          auto now = static_cast<uint64_t>(n->get_clock()->now().nanoseconds());
+          if (m->twist.twist.linear.x == .75 && m->child_frame_id == "base_test" &&
+              stamp > now - 2000000000ULL && stamp < now + 100000000ULL)
             seen.insert("odom");
         }));
     subs.push_back(n->create_subscription<geometry_msgs::msg::Twist>(
@@ -105,7 +174,7 @@ int main(int argc, char **argv) {
     subs.push_back(n->create_subscription<sensor_msgs::msg::Image>(
         "/lite3/camera/color/image_raw", qos, [&](sensor_msgs::msg::Image::ConstSharedPtr m) {
           if (m->width == 64 && m->height == 48 && m->encoding == "rgb8" &&
-              m->header.frame_id == "color_test" && m->header.stamp.sec == 123 &&
+              m->header.frame_id == "color_test" && m->header.stamp.sec > 1000000000 &&
               m->data.size() == 9216 && m->data[1234] == 1234 % 251)
             seen.insert("color");
         }));
@@ -113,20 +182,20 @@ int main(int argc, char **argv) {
         "/lite3/camera/aligned_depth_to_color/image_raw", qos,
         [&](sensor_msgs::msg::Image::ConstSharedPtr m) {
           if (m->width == 64 && m->height == 48 && m->encoding == "16UC1" &&
-              m->header.frame_id == "color_test" && m->header.stamp.sec == 123 &&
+              m->header.frame_id == "color_test" && m->header.stamp.sec > 1000000000 &&
               m->data.size() == 6144 && m->data[1234] == 1234 % 251)
             seen.insert("aligned");
         }));
     subs.push_back(n->create_subscription<sensor_msgs::msg::CameraInfo>(
         "/lite3/camera/color/camera_info", qos,
         [&](sensor_msgs::msg::CameraInfo::ConstSharedPtr m) {
-          if (m->width == 64 && m->height == 48 && m->header.stamp.sec == 123 && m->k[0] == 456)
+          if (m->width == 64 && m->height == 48 && m->header.stamp.sec > 1000000000 && m->k[0] == 456)
             seen.insert("color_info");
         }));
     subs.push_back(n->create_subscription<sensor_msgs::msg::CameraInfo>(
         "/lite3/camera/aligned_depth_to_color/camera_info", qos,
         [&](sensor_msgs::msg::CameraInfo::ConstSharedPtr m) {
-          if (m->width == 64 && m->height == 48 && m->header.stamp.sec == 123 && m->k[0] == 456)
+          if (m->width == 64 && m->height == 48 && m->header.stamp.sec > 1000000000 && m->k[0] == 456)
             seen.insert("aligned_info");
         }));
     subs.push_back(n->create_subscription<std_msgs::msg::Float64>(
@@ -144,8 +213,21 @@ int main(int argc, char **argv) {
     auto end = steady_clock::now() + seconds(18);
     while (rclcpp::ok() && steady_clock::now() < end) {
       rclcpp::spin_some(n);
-      if (seen.size() == 12 && stale) {
-        puts("integration passed: 12 streams and stale status");
+      if (mode == "blocked") {
+        if (steady_clock::now() > end - seconds(13)) {
+          if (time_valid || unexpected_tf || !seen.count("camera_tf") ||
+              seen.count("imu") || seen.count("odom") || seen.count("color") ||
+              seen.count("aligned")) {
+            fprintf(stderr, "blocked check failed: time_valid=%d\n", time_valid);
+            rclcpp::shutdown();
+            return 1;
+          }
+          puts("blocked check passed: no fusion topics before time qualification");
+          rclcpp::shutdown();
+          return 0;
+        }
+      } else if (seen.size() == 13 && stale && time_valid && !unexpected_tf) {
+        puts("integration passed: 13 streams and stale status");
         rclcpp::shutdown();
         return 0;
       }
@@ -171,6 +253,22 @@ int main(int argc, char **argv) {
   auto aligned_info = n->create_publisher<sensor_msgs::msg::CameraInfo>(
       "/camera/aligned_depth_to_color/camera_info", qos);
   auto status = n->create_publisher<std_msgs::msg::Bool>("/sensor_status/imu_isalive", qos);
+  auto static_tf = n->create_publisher<tf2_msgs::msg::TFMessage>(
+      "/tf_static", rclcpp::QoS(10).reliable().transient_local());
+  tf2_msgs::msg::TFMessage camera_tf;
+  for (const auto &edge : {
+           std::pair<const char *, const char *>{"camera_link", "camera_depth_frame"},
+           {"camera_depth_frame", "camera_depth_optical_frame"},
+           {"camera_link", "camera_color_frame"},
+           {"camera_color_frame", "camera_color_optical_frame"},
+           {"base_link", "camera_link"}}) {
+    geometry_msgs::msg::TransformStamped t;
+    t.header.frame_id = edge.first;
+    t.child_frame_id = edge.second;
+    t.transform.rotation.w = 1;
+    camera_tf.transforms.push_back(t);
+  }
+  static_tf->publish(camera_tf);
   sensor_msgs::msg::Imu a;
   a.header.stamp.sec = 123;
   a.header.frame_id = "imu_test";
@@ -225,6 +323,11 @@ int main(int argc, char **argv) {
   color_ci.k[0] = 456;
   auto end = steady_clock::now() + seconds(8);
   while (rclcpp::ok() && steady_clock::now() < end) {
+    builtin_interfaces::msg::Time steady_stamp = rclcpp::Clock(RCL_STEADY_TIME).now();
+    builtin_interfaces::msg::Time wall_stamp = n->now();
+    a.header.stamp = b.header.stamp = steady_stamp;
+    im.header.stamp = ci.header.stamp = wall_stamp;
+    rgb.header.stamp = aligned_image.header.stamp = color_ci.header.stamp = wall_stamp;
     imu->publish(a);
     odom->publish(b);
     handle->publish(c);

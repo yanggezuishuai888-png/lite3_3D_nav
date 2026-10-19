@@ -7,6 +7,6 @@ lite3_gateway_receiver:
     telemetry_port: 45001
     image_port: 45003
     output_prefix: /lite3
-    timestamp_policy: receive
+    timestamp_policy: source  # 使用狗端已转换为系统时间的测量时间戳
     camera_timestamp_policy: source  # 保留相机 RGB/对齐深度原始时间戳供配对
     stale_timeout: 2.5

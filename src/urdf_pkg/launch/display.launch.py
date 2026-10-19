@@ -9,7 +9,7 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     description_file = PathJoinSubstitution([
-        FindPackageShare('urdf_pkg'), 'urdf', 'Lite3.urdf'
+        FindPackageShare('urdf_pkg'), 'Lite3_urdf', 'urdf', 'Lite3.urdf'
     ])
     rviz_config = PathJoinSubstitution([
         FindPackageShare('urdf_pkg'), 'rviz', 'lite3.rviz'

@@ -1,114 +1,72 @@
 /rtabmap/rtabmap:
   ros__parameters:
-
     ############################
     # ROS接口参数
     ############################
-
-    frame_id: "camera_link"
-
-    odom_frame_id: "odom"
-
-    map_frame_id: "map"
-
-
-    subscribe_rgb: true
-
-    subscribe_depth: true
-
-    subscribe_rgbd: false
-
-
-    approx_sync: true
-
-
-    queue_size: 10
-
-
+    frame_id: "base_link"          # 机器人基座坐标系
+    odom_frame_id: "odom"          # 非空：通过TF获取里程计
+    map_frame_id: "map"             # 全局地图坐标系
+    publish_tf: true                # 开启 map → odom TF发布
+    subscribe_rgb: true             # 订阅RGB图像
+    subscribe_depth: true           # 订阅深度图像
+    subscribe_rgbd: false            # 不订阅预同步RGBD消息
+    approx_sync: true               # 使用近似时间同步
+    sync_queue_size: 10             # 消息同步队列大小
 
     ############################
     # 数据库
     ############################
-
-    database_path: "/home/ruming/ros2_ws/src/rtabmap_robot/db/rtabmap.db"
-
-
+    database_path: "/home/ruming/ros2_ws/src/rtabmap_robot/db/market1-1.db"  # 地图数据库路径
 
     ############################
-    # 视觉里程计
+    # 视觉特征与配准
     ############################
-
-    Odom/Strategy: "0"
-
-
-    # 特征最少数量
-    Vis/MinInliers: "15"
-
-
-    # 特征检测器
-    # 6 = GFTT
-    Kp/DetectorStrategy: "6"
-
-
+    Vis/MinInliers: "15"             # 视觉匹配最少内点数量
+    Kp/DetectorStrategy: "6"         # 特征检测策略：6=GFTT/BRIEF
 
     ############################
     # RGB-D SLAM
     ############################
-
-
-    # 使用RGB-D
-    RGBD/NeighborLinkRefining: "true"
-
-
-    # 空间近邻检测
-    RGBD/ProximityBySpace: "true"
-
-
+    RGBD/NeighborLinkRefining: "true"  # 优化相邻关键帧约束
+    RGBD/ProximityBySpace: "true"      # 开启空间近邻检测
 
     ############################
-    # 回环检测
+    # 回环检测与内存管理
     ############################
-
-
-    Mem/IncrementalMemory: "true"
-
-
-    Mem/InitWMWithAllNodes: "false"
-
-
+    Mem/IncrementalMemory: "true"     # 增量建图模式
+    Mem/InitWMWithAllNodes: "false"   # 不将全部历史节点载入工作记忆
 
     ############################
     # 图优化
     ############################
-
-
-    RGBD/OptimizeFromGraphEnd: "false"
-
-
+    RGBD/OptimizeFromGraphEnd: "false" # 不从图末端开始优化
 
     ############################
-    # 建图
+    # 栅格建图
     ############################
-
-
-    Grid/FromDepth: "true"
-
-
-    # 栅格大小5cm
-    Grid/CellSize: "0.05"
-
-
-    # 最大障碍距离
-    Grid/RangeMax: "5.0"
-
-
+    Grid/Sensor: "1"                  # 使用深度图生成栅格
+    Grid/CellSize: "0.05"             # 栅格分辨率：5cm
+    Grid/RangeMax: "5.0"               # 最大建图距离：5m
 
     ############################
-    # 点云
+    # 配准与近邻检测
     ############################
+    RGBD/ProximityPathMaxNeighbors: "0" # 禁用基于局部路径的多对一近邻检测
+    Reg/Strategy: "0"                  # 配准策略：0=视觉
 
 
-    RGBD/ProximityPathMaxNeighbors: "0"
+/rtabmap/rgbd_odometry:
+  ros__parameters:
+    ############################
+    # 视觉里程计接口
+    ############################
+    frame_id: "base_link"             # 机器人基座坐标系
+    odom_frame_id: "odom"             # 视觉里程计坐标系
+    publish_tf: true                  # 开启 odom → base_link TF发布
 
-
-    Reg/Strategy: "0"
+    ############################
+    # 视觉里程计参数
+    ############################
+    Odom/Strategy: "0"                # 里程计策略：0=帧到地图
+    Vis/MinInliers: "15"              # 视觉匹配最少内点数量
+    Kp/DetectorStrategy: "6"          # 特征检测策略：6=GFTT/BRIEF

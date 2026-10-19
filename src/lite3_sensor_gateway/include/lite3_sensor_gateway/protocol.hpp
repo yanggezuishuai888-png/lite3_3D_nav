@@ -10,7 +10,7 @@ namespace lite3_gateway {
 static_assert(sizeof(double) == 8 && std::numeric_limits<double>::is_iec559,
               "Wire format requires IEEE-754 binary64");
 using Bytes = std::vector<uint8_t>;
-constexpr size_t kHeaderSize = 56, kDatagramSize = 1200, kChunkSize = kDatagramSize - kHeaderSize;
+constexpr size_t kHeaderSize = 64, kDatagramSize = 1200, kChunkSize = kDatagramSize - kHeaderSize;
 constexpr size_t kMaxMessage = 16 * 1024 * 1024;
 enum class Type : uint8_t {
   Heartbeat = 1,
@@ -24,6 +24,10 @@ enum class Type : uint8_t {
   AlignedDepth = 9,
   ColorInfo = 10,
   AlignedInfo = 11,
+  TimeRequest = 12,
+  TimeResponse = 13,
+  ClockStatus = 14,
+  CameraTf = 15,
   StatusImu = 16,
   StatusOdom = 17,
   StatusOdom2 = 18,
@@ -126,7 +130,7 @@ struct Envelope {
   Type type = Type::Heartbeat;
   ClockDomain clock = ClockDomain::Unknown;
   uint8_t flags = 0;
-  uint64_t session = 0, sequence = 0, sent_ns = 0, source_ns = 0;
+  uint64_t session = 0, sequence = 0, sent_ns = 0, source_ns = 0, raw_source_ns = 0;
 };
 struct Fragment {
   Envelope env;

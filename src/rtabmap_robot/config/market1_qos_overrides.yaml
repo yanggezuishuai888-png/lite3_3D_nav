@@ -1,0 +1,6 @@
+# The converted bag recorded /tf_static with volatile durability. TF listeners
+# require transient-local durability to receive the static transform sample.
+/tf_static:
+  reliability: reliable
+  durability: transient_local
+  history: keep_all

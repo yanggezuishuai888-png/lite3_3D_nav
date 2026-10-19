@@ -88,6 +88,36 @@ int main() {
     }
     check(rejected);
     check(decode_bool(encode_bool(true)));
+    tf2_msgs::msg::TFMessage camera_tf;
+    for (const auto &edge : {
+             std::pair<const char *, const char *>{"camera_link", "camera_depth_frame"},
+             {"camera_depth_frame", "camera_depth_optical_frame"},
+             {"camera_link", "camera_color_frame"},
+             {"camera_color_frame", "camera_color_optical_frame"}}) {
+      geometry_msgs::msg::TransformStamped t;
+      t.header.frame_id = edge.first;
+      t.child_frame_id = edge.second;
+      t.transform.rotation.w = 1;
+      camera_tf.transforms.push_back(t);
+    }
+    check(decode_camera_tf(encode_camera_tf(camera_tf)).transforms.size() == 4);
+    camera_tf.transforms[0].header.frame_id = "base_link";
+    rejected = false;
+    try {
+      encode_camera_tf(camera_tf);
+    } catch (...) {
+      rejected = true;
+    }
+    check(rejected);
+    camera_tf.transforms[0].header.frame_id = "camera_link";
+    camera_tf.transforms[0].transform.rotation.w = 0;
+    rejected = false;
+    try {
+      encode_camera_tf(camera_tf);
+    } catch (...) {
+      rejected = true;
+    }
+    check(rejected);
     std::cout << "codec tests passed\n";
   } catch (const std::exception &e) {
     std::cerr << e.what() << '\n';

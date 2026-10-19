@@ -22,12 +22,13 @@ int main() {
     e.session = 0x0102030405060708ULL;
     e.sequence = 10;
     e.source_ns = 123;
+    e.raw_source_ns = 456;
     Bytes b(9000);
     for (size_t i = 0; i < b.size(); ++i)
       b[i] = i % 251;
     auto packets = fragment(e, b);
     check(packets[0].size() == 1200 && packets[0][0] == 'L' && packets[0][3] == 'W' &&
-          packets[0][8] == 1 && packets[0][15] == 8);
+          packets[0][4] == 2 && packets[0][8] == 1 && packets[0][15] == 8);
     Reassembler a;
     Message m;
     check(!a.accept(parse_fragment(packets.back()), 0, m));
@@ -36,7 +37,7 @@ int main() {
     bool complete = false;
     for (size_t i = 0; i + 1 < packets.size(); ++i)
       complete = a.accept(parse_fragment(packets[i]), 0.01, m);
-    check(complete && m.payload == b && a.allocated() == 0);
+    check(complete && m.payload == b && m.env.raw_source_ns == 456 && a.allocated() == 0);
     auto bad = packets;
     bad[1].back() ^= 1;
     rejects([&] {
@@ -47,7 +48,7 @@ int main() {
     truncated.pop_back();
     rejects([&] { parse_fragment(truncated); });
     auto huge = packets[0];
-    huge[40] = 0xff;
+    huge[48] = 0xff;
     rejects([&] { parse_fragment(huge); });
     check(!a.accept(parse_fragment(packets[0]), 2, m));
     a.expire(3);

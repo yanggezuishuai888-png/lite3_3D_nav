@@ -5,6 +5,7 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <tf2_msgs/msg/tf_message.hpp>
 namespace lite3_gateway {
 Bytes encode(const sensor_msgs::msg::Imu &m);
 Bytes encode(const nav_msgs::msg::Odometry &m);
@@ -22,5 +23,8 @@ Bytes encode_scalar(double x);
 double decode_scalar(const Bytes &b);
 Bytes encode_bool(bool x);
 bool decode_bool(const Bytes &b);
+bool is_camera_internal_tf(const geometry_msgs::msg::TransformStamped &transform);
+Bytes encode_camera_tf(const tf2_msgs::msg::TFMessage &m);
+tf2_msgs::msg::TFMessage decode_camera_tf(const Bytes &b);
 uint64_t stamp_ns(const builtin_interfaces::msg::Time &stamp);
 } // namespace lite3_gateway

@@ -3,13 +3,14 @@ import os
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import GroupAction, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.actions import SetParametersFromFile
-
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node, SetParametersFromFile
 
 CAMERA_CONFIG_PATH = "/home/ruming/ros2_ws/src/rtabmap_robot/config/camera.yaml"
 RTABMAP_CONFIG_PATH = "/home/ruming/ros2_ws/src/rtabmap_robot/config/rtabmap.yaml"
+RVIZ_CONFIG_PATH = "/home/ruming/ros2_ws/src/rtabmap_robot/rviz/rviz2.rviz"
 
 
 def _load_ros_parameters(config_path, node_name):
@@ -42,7 +43,16 @@ def generate_launch_description():
         "rtabmap.launch.py",
     )
 
+    camera_info_republisher = Node(
+        package="rtabmap_robot",
+        executable="repeat_camera_info.py",
+        name="camera_info_republisher",
+        output="screen",
+    )
+
     launch_arguments = {
+        "rviz": LaunchConfiguration("rviz"),
+        "rviz_cfg": LaunchConfiguration("rviz_cfg"),
         "rgb_topic": camera_parameters["rgb_topic"],
         "depth_topic": camera_parameters["depth_topic"],
         "camera_info_topic": camera_parameters["camera_info_topic"],
@@ -51,7 +61,7 @@ def generate_launch_description():
         "approx_sync_max_interval": _launch_value(
             camera_parameters["approx_sync_max_interval"]
         ),
-        "queue_size": _launch_value(camera_parameters["queue_size"]),
+        "sync_queue_size": _launch_value(camera_parameters["queue_size"]),
         "subscribe_rgb": _launch_value(camera_parameters["subscribe_rgb"]),
         "depth": _launch_value(camera_parameters["subscribe_depth"]),
         "subscribe_rgbd": _launch_value(camera_parameters["subscribe_rgbd"]),
@@ -64,6 +74,17 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "rviz",
+                default_value="false",
+                description="Launch RViz2 with the configured RViz file",
+            ),
+            DeclareLaunchArgument(
+                "rviz_cfg",
+                default_value=RVIZ_CONFIG_PATH,
+                description="Absolute path to the RViz2 configuration",
+            ),
+            camera_info_republisher,
             GroupAction(
                 actions=[
                     SetParametersFromFile(RTABMAP_CONFIG_PATH),

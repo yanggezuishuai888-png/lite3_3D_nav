@@ -8,17 +8,19 @@
 Lite3（10.42.0.2，本机 ROS_DOMAIN_ID 保持原值，当前为 0）
 ├─ 运动主机 → 厂家 jetson2motion → 本机传感器话题 ─┐
 ├─ sensor_checker → 本机传感器存活 Bool ──────────┤
-└─ RGBD USB → 厂家 realsense_ros2 → RGB/对齐深度/内参 ┤
+└─ RGBD USB → 厂家 realsense_ros2 → RGB/对齐深度/内参/内部 TF ┤
                                                  ↓ 只订阅
                                lite3_gateway_sender（C++）
-                                  ├─ 底盘/状态/内参 → UDP 45001
+                                  ├─ 底盘/状态/内参/相机内部 TF → UDP 45001
                                   └─ RGB/深度图    → UDP 45003
                                                  ↓ 10.42.0.x
 PC（10.42.0.1，Jazzy，ROS_DOMAIN_ID=74）
 └─ lite3_gateway_receiver（C++）
    ├─ 校验版本、源 IP、会话、序号、CRC；图像分片重组
-   ├─ 发布 /lite3/... 标准 ROS 2 消息
-   └─ /lite3/gateway/status：连接、数据年龄、原始时间、错误和丢帧诊断
+   ├─ 回答狗端时钟探测；校时合格后发布融合用 ROS 2 消息
+   ├─ 将相机内部静态变换发布到 /tf_static
+   ├─ /lite3/gateway/time_valid：时钟是否合格
+   └─ /lite3/gateway/status：连接、时钟偏差、原始时间、错误和丢帧诊断
 ```
 
 接收端绑定 PC 的 45001/45003；发送端绑定 Jetson 地址及系统分配的临时源端口。不会重复绑定厂家的 43893/43897/43899，不直接接收运动主机 UDP，也不直接打开相机。多个 ROS 订阅者是正常用法，与两个 UDP 程序抢同一个端口不同。
@@ -39,15 +41,17 @@ PC（10.42.0.1，Jazzy，ROS_DOMAIN_ID=74）
 | /camera/aligned_depth_to_color/camera_info | /lite3/camera/aligned_depth_to_color/camera_info | sensor_msgs/CameraInfo：对齐深度内参 |
 | /camera/depth/image_rect_raw | /lite3/camera/depth/image_rect_raw | 可选：16UC1 原始深度，默认关闭 |
 | /camera/depth/camera_info | /lite3/camera/depth/camera_info | 可选：原始深度内参，默认关闭 |
+| /tf_static 中四条相机内部变换 | PC /tf_static | `camera_link→camera_depth_frame/camera_color_frame` 及各自 optical frame；只转发这些边 |
 | /sensor_status/*_isalive | /lite3/sensor_status/*_isalive | std_msgs/Bool：imu、odom、odom2、joint、ultrasound、realsense、lidar |
 | 参数 depth_scale_m | /lite3/camera/depth/scale_m | std_msgs/Float64：原始深度值乘此值得到米；默认 0.001 |
 | 网关自身统计 | /lite3/gateway/status | diagnostic_msgs/DiagnosticArray：每 0.5 秒 |
+| 时钟质量门控 | /lite3/gateway/time_valid | std_msgs/Bool：false 时融合输入不发布 |
 
 默认转发建图基础数据：RGB、对齐深度及各自内参；原始深度可通过 `enable_depth: true` 打开。不转发厂家点云、雷达、关节原始数据和冗余 `/leg_odom`。相机必须由既有驱动运行，网关不会启停厂家服务。默认 RGB/对齐深度各最多 15 Hz，深度 zlib 无损压缩，RGB 原样发送。`image_max_mbps: 1000` 是软件上限，不是实际链路吞吐。640×480、15 Hz 的 RGB 加 16UC1 深度原始负载约 184 Mbit/s，分片和网络头使实际流量更高；第三路原始深度会继续增加负载。要观察 PC 诊断中的 `sequence_gaps`、`incomplete_expired`、实际 Hz 和 CPU，而非仅凭千兆协商速率判断稳定。
 
-双机随机图像压力测试约收到每路 10 FPS，低于配置上限 15 Hz；该数据几乎不可压缩，而且狗端真实相机服务当时未运行。实际 RGB-D 频率需在相机启动后重新测量。若只有 10 Hz 左右，应检查狗端图像输入 Hz、sender 日志 `overwritten`、两端 CPU 和 PC 诊断；可将 `color_max_hz`/`depth_max_hz` 同时调到可持续速率，或在后续加入 JPEG 等压缩方案。保留两路相近的输出频率更利于按时间戳配对。
+双机随机图像压力测试约收到每路 10 FPS，低于配置上限 15 Hz；该数据几乎不可压缩。真实相机启动后，PC C++ SensorDataQoS 订阅实测 RGB 12.1 Hz、对齐深度 12.7 Hz，完全相同时间戳的图像对约 10.4 对/秒。若建图需要更高配对频率，应检查狗端图像输入 Hz、sender 日志 `overwritten`、两端 CPU 和 PC 诊断；可在后续加入 JPEG 等压缩方案，或调低两路输出频率以匹配可持续吞吐。保留两路相近的输出频率更利于按时间戳配对。
 
-传感器话题采用 best effort、volatile；PC 订阅也应允许 best effort。状态、内参、深度尺度与诊断采用 reliable、volatile。内参按 1 Hz 重发，匹配图像尺寸和 frame_id 时随对应图像再发布相同时间戳。缓存内参的重发不表示相机仍在采集；判断相机数据存活要看图像接收年龄。PC 默认保留相机源时间戳，供 RGB 与对齐深度按 header.stamp 近似配对；底盘仍使用 PC 接收时间。
+传感器话题采用 best effort、volatile；PC 订阅也应允许 best effort。状态、内参、深度尺度与诊断采用 reliable、volatile。内参按 1 Hz 重发，匹配图像尺寸和 frame_id 时随对应图像再发布相同时间戳。缓存内参的重发不表示相机仍在采集；判断相机数据存活要看图像接收年龄。PC 保留相机源时间戳供 RGB-D 配对；底盘单调时间戳在狗端转换成系统时间后保留。
 
 ## 编译
 
@@ -60,7 +64,7 @@ MAKEFLAGS=-j2 colcon build --packages-select lite3_sensor_gateway --cmake-args -
 source install/local_setup.bash
 ```
 
-PC 端只复制 `src/lite3_sensor_gateway` 源码目录到现有 `~/ros2_ws/src`，不复制 Jetson 的 build/install/log。本次已经同步并编译；以后更新两端时需保持协议/节点源码一致：
+PC 端只复制 `src/lite3_sensor_gateway` 源码目录到现有 `~/ros2_ws/src`，不复制 Jetson 的 build/install/log。协议变更后必须同步更新并编译 PC；不要覆盖 PC 自己的接收配置：
 
 ```bash
 # 在 PC 执行；如果用户名或 SSH 地址不同，修改此命令
@@ -70,7 +74,8 @@ cd ~/ros2_ws
 source /opt/ros/jazzy/setup.bash
 # 若缺依赖，安装：build-essential cmake python3-colcon-common-extensions
 # zlib1g-dev ros-jazzy-rclcpp ros-jazzy-sensor-msgs ros-jazzy-nav-msgs
-# ros-jazzy-geometry-msgs ros-jazzy-std-msgs ros-jazzy-diagnostic-msgs ros-jazzy-launch-ros
+# ros-jazzy-geometry-msgs ros-jazzy-std-msgs ros-jazzy-diagnostic-msgs ros-jazzy-tf2-msgs
+# ros-jazzy-tf2-ros ros-jazzy-launch-ros
 colcon build --packages-select lite3_sensor_gateway --cmake-args -DBUILD_TESTING=ON
 source install/local_setup.bash
 ```
@@ -96,7 +101,7 @@ export ROS_DOMAIN_ID=0
 ros2 launch lite3_sensor_gateway sender.launch.py
 ```
 
-默认地址为狗 10.42.0.2、PC 10.42.0.1；应先核对网卡。接收端绑定不存在的地址会明确报错退出。PC 如启用防火墙，应允许来自 10.42.0.2 的 UDP 45001/45003。无需配置端口转发。
+默认地址为狗 10.42.0.2、PC 10.42.0.1；应先核对网卡。接收端绑定不存在的地址会明确报错退出。PC 如启用防火墙，应允许来自 10.42.0.2 的 UDP 45001/45003，以及 NTP UDP 123；狗端需允许来自 PC 45001 的探测应答返回临时源端口。无需配置端口转发。
 
 更改参数可复制 config 中 YAML 到新工作区自己的位置：
 
@@ -114,24 +119,36 @@ ros2 launch lite3_sensor_gateway receiver.launch.py config:=/绝对路径/receiv
 ```bash
 ros2 topic list
 ros2 topic echo /lite3/gateway/status
+ros2 topic echo /lite3/gateway/time_valid
 ros2 topic echo /lite3/imu/data --qos-reliability best_effort --once
 ros2 topic echo /lite3/leg_odom2 --qos-reliability best_effort --once
 ros2 topic hz /lite3/camera/color/image_raw
 ros2 topic hz /lite3/camera/aligned_depth_to_color/image_raw
+python3 ~/ros2_ws/src/lite3_sensor_gateway/test/probe_rgbd.py --seconds 15
+ros2 topic echo /tf_static tf2_msgs/msg/TFMessage --qos-reliability reliable --qos-durability transient_local
+ros2 run tf2_ros tf2_echo camera_link camera_color_optical_frame
+# 更准确的大图双路测量：BUILD_TESTING=ON 时运行
+~/ros2_ws/build/lite3_sensor_gateway/integration_fixture --ros-args -p mode:=probe
 ```
 
-验收顺序：底盘数据、RGB/对齐深度及内参、两路图像尺寸与时间戳、数据频率、停发后的失效状态、重新启动 sender 后恢复。相机服务未运行时图像缺数据是预期行为。首次接收等到一秒一次的心跳建立会话，通常需要约 1–2 秒。
+验收顺序：先确认 `/lite3/gateway/time_valid` 为 true，再检查底盘数据、RGB/对齐深度及内参、两路图像尺寸与时间戳、数据频率、停发后的失效状态、重新启动 sender 后恢复。false 时没有融合话题消息是预期的保护行为。相机服务未运行时图像缺数据是预期行为。首次接收需要建立会话并取得至少三个合格探测样本，通常需要数秒。
 
 发送端每十秒日志包含送出消息数、队列覆盖数和发送/编码错误数。送出只表示本机尝试发送，不能证明 PC 收到；以 PC 诊断为准。接收端诊断中的 sequence_gaps 统计已完成消息之间的序号缺口；incomplete_expired 统计重组超时。`old_packets` 还包含首次心跳建立会话前被忽略的数据，启动时非零是正常的。默认 2.5 秒未收到某 Bool 的更新即发布 false；不会让旧 true 永久保留。某 Bool 报 false 并不禁止原始数据发布，请同时观察对应数据年龄。
 
 UDP 无重传、无可靠交付承诺；图像损坏或缺分片即整帧丢弃，避免向下游发布半帧。只保留每种待发送数据的最新样本；接收内存与待重组数量有界。版本和 CRC 用于兼容/损坏检测，源 IP 白名单不等同于加密认证。本实现用于当前有线局域网。
 
-## 时间戳与 TF：明确待办
+## 时间戳、校时与 TF
 
-- 厂家 IMU/里程计源码使用 `RCL_STEADY_TIME`，不能与 PC Unix 时间直接相减。默认 `timestamp_policy: receive` 为 IMU/里程计写入 PC 接收时间；`camera_timestamp_policy: source` 保留相机源时间以配对 RGB-D。两种时间尚未统一，不应直接拿去验证高精度融合。
-- UDP 信封保留源时间及声明时钟域；诊断保留最近一条 `source_stamp_ns`、`source_clock_domain`、`sender_system_ns`。0=未知，1=单调时钟，2=系统时钟。原消息全部字段除默认输出时间戳外按原样保留。相机时钟默认未知。
-- `timestamp_policy: source` 仅用于已核对相同时间基准的后续阶段。它会直接保留源 stamp，不做换算；当前厂家单调时钟下不应切换用于导航。需制定 Jetson↔PC 校时、单调时钟映射、相机硬件时钟映射和重启后重建策略；评估 IMU/深度/里程计相对延迟、漂移和抖动。单靠 NTP 不会自动修正消息内的单调时间戳。
-- 保留原始 frame_id/child_frame_id，包括空值。拿到 URDF 和外参后补 `base_link→imu_link/camera_link/...` 静态变换，核对相机 optical frame，指定 `odom→base_link` 的唯一发布者和 SLAM/定位 `map→odom` 的唯一发布者。本包当前不发 `/tf` 或 `/tf_static`，不编造 frame，也不把 odometry 自动转 TF。
+先使 PC 与狗的系统时钟持续同步。推荐在 PC 上配置 chrony 为 10.42.0.x 网段的时间服务器（`allow 10.42.0.2`），狗端配置 `server 10.42.0.1 iburst`，并关闭与 chrony 冲突的其他校时服务。配置应在各自系统服务中完成；网关不修改厂家服务。用两端的 `chronyc tracking`、`chronyc sources -v` 检查来源、状态与偏差。PC 的系统时间还应由可靠上游校准；只让狗与一个错误的 PC 时间一致不能保证绝对时间正确。
+
+两端安装 chrony 后，在 PC 的 `/etc/chrony/chrony.conf` 保留上游时间源并增加 `allow 10.42.0.2`；在狗端同一文件增加 `server 10.42.0.1 iburst`，且取消其他上游 `server`/`pool`，使狗只向 PC 校时。先停用两端的 `systemd-timesyncd`，再启动 chrony。PC 防火墙允许狗访问 UDP 123。确认狗端 `chronyc sources -v` 选中的来源是 `10.42.0.1`，`chronyc tracking` 不再显示未同步；配置前先停相机及网关，待校时稳定后重启相机和网关。这里没有自动改动系统时钟服务。
+
+网关另通过 10.42.0.x 的 UDP 45001 做持续的四时间戳探测，狗端按往返时间计算跨机时钟偏差上界。连续三个样本的 `abs(offset)+RTT/2 <= 5 ms`、最近合格样本不超过 2.5 秒，并且狗端单调→系统时钟映射新鲜，才开始发送 IMU、里程计及 RGB-D。PC 还要求最近 1.5 秒收到合格状态、心跳在线、本机时钟映射正常，才发布这些融合话题；`/lite3/gateway/time_valid=false` 时下游不得融合旧缓存。校时是持续过程，不是开机只执行一次。链路中断、偏差超限或时钟跳变会关闭门控；系统时钟发生跳变后必须重新启动相机和对应网关节点，以重建相机驱动的时间锚点。启动顺序建议先校时、再启动相机、PC receiver、狗端 sender。
+
+厂家 IMU/里程计原戳是 `RCL_STEADY_TIME`。狗端在本机近同时采样单调与系统时钟，转换原戳，并把原始单调时间保留在协议 `raw_source_ns`；PC 输出消息的 header.stamp 是转换后的系统时间。相机 RGB、对齐深度与内参保留驱动源戳，接收端验证其与信封一致；图像戳偏离狗端当前系统时间超过 250 ms 时被丢弃。诊断包含跨机偏差、上界、RTT、映射不确定度和最近探测年龄。时钟门控只证明当前两机时间可比，不能证明相机硬件时间锚点或所有传感器的采样延迟已经准确；建图前仍需测 RGB-D 与 IMU/里程计的实际相对延迟、抖动。`timestamp_policy` 与 `camera_timestamp_policy` 必须为 `source`。
+
+门控对 IMU、里程计、图像和内参生效；超声波、遥控状态和存活 Bool 仍作为诊断数据传输，不能在 `time_valid=false` 时把它们当作融合输入。由于现有 Bool 没有测量时间戳，本阶段不将它们纳入视觉惯性融合。
+- 保留原始 frame_id/child_frame_id，包括空值。狗端订阅相机驱动的 `/tf_static`，严格筛选四条内部变换，PC 网关在 `/tf_static` 重新发布。静态变换不需要测量时刻配对，因此独立于 `time_valid` 门控；动态传感器仍须在校时合格后使用。PC 的 URDF/robot_state_publisher 只发布机身 `base_link→TORSO`（暂定零）及安装链 `base_link→camera_bottom_screw_frame→camera_link`，不要再发布相机内部四条边。这里的安装位姿仍是待厂家确认的假设，不能当作精确标定值。用 `tf2_echo base_link camera_color_optical_frame` 检查完整静态链。`odom→base_link`、`map→odom` 的发布者仍待后续确定，本包不把 odometry 自动转 TF。
 - 向厂家确认 IMU/里程计坐标轴和单位、超声波量纲/无效值、odom 定义与复位行为、协方差可用性、传感器安装外参。URDF 到位后再验证整条坐标树；拿到这些之前可以验通数据，但不能认定导航链路完成。
 - 速度仲裁、遥控优先、网络断连停车、cmd_vel 回传均属于后续控制阶段。本包不创建任何命令发布者，不收控制 UDP。
 
@@ -145,7 +162,7 @@ colcon test --packages-select lite3_sensor_gateway --event-handlers console_dire
 colcon test-result --verbose
 ```
 
-协议/编解码单测覆盖乱序、重复、CRC、分片长度、超时、内存淘汰、压缩、字段往返与畸形数据。集成测试在本机独立 ROS 域 81/82、仅 loopback 上运行虚拟传感器、网关和检查器，验证原始深度、RGB、对齐深度、内参、底盘消息和状态失效，不接触厂家服务。详见 test/run_integration.py；避免在其他业务已使用 81/82 域时运行。PC Jazzy 实机编译、10.42 链路丢包/带宽、真实相机及长时间运行验收仍需执行。
+协议/编解码单测覆盖乱序、重复、CRC、分片长度、超时、内存淘汰、压缩、字段往返与畸形数据。时间单测覆盖单调/系统转换、时钟跳变、偏差超限与过期。集成测试在本机独立 ROS 域 81/82、仅 loopback 上运行虚拟传感器、网关和检查器，验证校时合格后底盘与 RGB-D 发布、无校时回包时阻止融合数据，不接触厂家服务。详见 test/run_integration.py；避免在其他业务已使用 81/82 域时运行。真实 10.42 链路已验证时钟门控保护；完成直连校时后的真实相机及长时间运行验收仍需执行。
 
 ## sender 启动出现 exit code -11
 

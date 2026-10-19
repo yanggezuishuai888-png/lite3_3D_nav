@@ -1,24 +1,24 @@
 camera:
   ros__parameters:
 
-    # RGB图像topic
-    rgb_topic: "/camera/rgb/image_color"
+    # OpenLORIS D400 RGB图像
+    rgb_topic: "/d400/color/image_raw"
 
-    # 深度图topic
-    depth_topic: "/camera/depth/image"
+    # 已对齐到彩色相机的深度图
+    depth_topic: "/d400/aligned_depth_to_color/image_raw"
 
-    # 相机内参
-    camera_info_topic: "/camera/rgb/camera_info"
+    # 由 camera_info_republisher 按 RGB 时间戳重发的内参
+    camera_info_topic: "/openloris/color/camera_info"
 
 
-    # TF中相机坐标系名称
-    frame_id: "camera_link"
+    # 机器人基座；base_link -> d400_color 静态TF来自bag
+    frame_id: "base_link"
 
 
     # 时间同步
     approx_sync: true
 
-    # TUM RGB-D官方推荐的最大RGB/深度时间差（秒）
+    # RGB与对齐深度的近似同步最大时间差（秒）
     approx_sync_max_interval: 0.02
 
     # 同步队列大小
@@ -33,5 +33,5 @@ camera:
     subscribe_rgbd: false
 
 
-    # 深度图是否已经和彩色图对齐
+    # OpenLORIS深度图已对齐到彩色图
     depth_aligned: true

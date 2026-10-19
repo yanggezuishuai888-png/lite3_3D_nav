@@ -5,5 +5,6 @@ lite3_gateway_receiver:
     telemetry_port: 45001
     image_port: 45003
     output_prefix: /lite3
-    timestamp_policy: receive
+    timestamp_policy: source
+    camera_timestamp_policy: source
     stale_timeout: 2.5
