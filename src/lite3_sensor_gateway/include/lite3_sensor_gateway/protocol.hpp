@@ -34,7 +34,8 @@ enum class Type : uint8_t {
   StatusJoint = 19,
   StatusUltrasound = 20,
   StatusCamera = 21,
-  StatusLidar = 22
+  StatusLidar = 22,
+  CmdVel = 23
 };
 inline bool is_image(Type t) {
   return t == Type::Depth || t == Type::Color || t == Type::AlignedDepth;

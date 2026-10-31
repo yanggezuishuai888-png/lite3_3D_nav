@@ -1,0 +1,7 @@
+lite3_command_sender:
+  ros__parameters:
+    bind_ip: "10.42.0.1"  # PC 网线地址
+    dog_ip: "10.42.0.2"  # 狗端网线地址
+    command_port: 45005  # 独立控制 UDP 端口
+    input_topic: /cmd_vel  # PC 导航速度输入
+    time_valid_topic: /lite3/gateway/time_valid  # 跨机时间门控

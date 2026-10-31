@@ -1,0 +1,6 @@
+lite3_command_receiver:
+  ros__parameters:
+    bind_ip: "10.42.0.2"  # 狗端网线地址
+    pc_ip: "10.42.0.1"  # 唯一允许的控制来源
+    command_port: 45005  # 独立控制 UDP 端口
+    output_topic: /cmd_vel  # 狗端厂家速度输入

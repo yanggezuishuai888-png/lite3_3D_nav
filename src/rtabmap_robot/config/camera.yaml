@@ -1,37 +1,31 @@
+
 camera:
   ros__parameters:
 
-    # OpenLORIS D400 RGB图像
-    rgb_topic: "/d400/color/image_raw"
+    ############################
+    # RGB-D图像话题
+    ############################
+    rgb_topic: "/lite3/camera/color/image_raw"                     # RGB彩色图像话题
+    depth_topic: "/lite3/camera/aligned_depth_to_color/image_raw"  # 已对齐到RGB的深度图话题
+    camera_info_topic: "/lite3/camera/color/camera_info"           # RGB相机内参话题，由桥接节点逐帧重发
+    imu_topic: "/lite3/imu/data"                                    # Lite3机身IMU
 
-    # 已对齐到彩色相机的深度图
-    depth_topic: "/d400/aligned_depth_to_color/image_raw"
+    ############################
+    # 机器人坐标系
+    ############################
+    frame_id: "base_link"           # 机器人基座坐标系，需通过TF连接到相机坐标系
 
-    # 由 camera_info_republisher 按 RGB 时间戳重发的内参
-    camera_info_topic: "/openloris/color/camera_info"
-
-
-    # 机器人基座；base_link -> d400_color 静态TF来自bag
-    frame_id: "base_link"
-
-
+    ############################
     # 时间同步
-    approx_sync: true
+    ############################
+    approx_sync: true              # 开启RGB、Depth、CameraInfo近似时间同步
+    approx_sync_max_interval: 0.02 # 最大同步时间差：20ms
+    queue_size: 10                 # 消息同步队列大小
 
-    # RGB与对齐深度的近似同步最大时间差（秒）
-    approx_sync_max_interval: 0.02
-
-    # 同步队列大小
-    queue_size: 10
-
-
-    # 使用RGB-D输入
-    subscribe_rgb: true
-
-    subscribe_depth: true
-
-    subscribe_rgbd: false
-
-
-    # OpenLORIS深度图已对齐到彩色图
-    depth_aligned: true
+    ############################
+    # RGB-D输入模式
+    ############################
+    subscribe_rgb: true            # 订阅RGB图像
+    subscribe_depth: true          # 订阅深度图像
+    subscribe_rgbd: false          # 不订阅预先打包的RGBDImage消息
+    depth_aligned: true            # 深度图已对齐到RGB，无需再次进行像素对齐

@@ -41,7 +41,7 @@ PC（10.42.0.1，Jazzy，ROS_DOMAIN_ID=74）
 | /camera/aligned_depth_to_color/camera_info | /lite3/camera/aligned_depth_to_color/camera_info | sensor_msgs/CameraInfo：对齐深度内参 |
 | /camera/depth/image_rect_raw | /lite3/camera/depth/image_rect_raw | 可选：16UC1 原始深度，默认关闭 |
 | /camera/depth/camera_info | /lite3/camera/depth/camera_info | 可选：原始深度内参，默认关闭 |
-| /tf_static 中四条相机内部变换 | PC /tf_static | `camera_link→camera_depth_frame/camera_color_frame` 及各自 optical frame；只转发这些边 |
+| /tf_static 中五条相机内部变换 | PC /tf_static | 深度、彩色及对齐深度帧到相应 optical frame；只转发当前驱动实际发布的五条边 |
 | /sensor_status/*_isalive | /lite3/sensor_status/*_isalive | std_msgs/Bool：imu、odom、odom2、joint、ultrasound、realsense、lidar |
 | 参数 depth_scale_m | /lite3/camera/depth/scale_m | std_msgs/Float64：原始深度值乘此值得到米；默认 0.001 |
 | 网关自身统计 | /lite3/gateway/status | diagnostic_msgs/DiagnosticArray：每 0.5 秒 |
@@ -148,7 +148,7 @@ UDP 无重传、无可靠交付承诺；图像损坏或缺分片即整帧丢弃�
 厂家 IMU/里程计原戳是 `RCL_STEADY_TIME`。狗端在本机近同时采样单调与系统时钟，转换原戳，并把原始单调时间保留在协议 `raw_source_ns`；PC 输出消息的 header.stamp 是转换后的系统时间。相机 RGB、对齐深度与内参保留驱动源戳，接收端验证其与信封一致；图像戳偏离狗端当前系统时间超过 250 ms 时被丢弃。诊断包含跨机偏差、上界、RTT、映射不确定度和最近探测年龄。时钟门控只证明当前两机时间可比，不能证明相机硬件时间锚点或所有传感器的采样延迟已经准确；建图前仍需测 RGB-D 与 IMU/里程计的实际相对延迟、抖动。`timestamp_policy` 与 `camera_timestamp_policy` 必须为 `source`。
 
 门控对 IMU、里程计、图像和内参生效；超声波、遥控状态和存活 Bool 仍作为诊断数据传输，不能在 `time_valid=false` 时把它们当作融合输入。由于现有 Bool 没有测量时间戳，本阶段不将它们纳入视觉惯性融合。
-- 保留原始 frame_id/child_frame_id，包括空值。狗端订阅相机驱动的 `/tf_static`，严格筛选四条内部变换，PC 网关在 `/tf_static` 重新发布。静态变换不需要测量时刻配对，因此独立于 `time_valid` 门控；动态传感器仍须在校时合格后使用。PC 的 URDF/robot_state_publisher 只发布机身 `base_link→TORSO`（暂定零）及安装链 `base_link→camera_bottom_screw_frame→camera_link`，不要再发布相机内部四条边。这里的安装位姿仍是待厂家确认的假设，不能当作精确标定值。用 `tf2_echo base_link camera_color_optical_frame` 检查完整静态链。`odom→base_link`、`map→odom` 的发布者仍待后续确定，本包不把 odometry 自动转 TF。
+- 相机和 IMU 保留原始 frame_id；PC 接收端对厂家 `/leg_odom2` 缺失的 `header.frame_id`、`child_frame_id` 分别补 `odom`、`base_link`，非空字段不覆盖。狗端订阅相机驱动的 `/tf_static`，严格筛选五条内部变换；对齐深度模式下，`camera_color_optical_frame` 的实际父帧为 `camera_aligned_depth_to_color_frame`。PC 网关在 `/tf_static` 重新发布。静态变换不需要测量时刻配对，因此独立于 `time_valid` 门控；动态传感器仍须在校时合格后使用。PC 的 URDF 单独发布本体和安装链，不要重复发布相机内部边。用 `tf2_echo base_link camera_color_optical_frame` 检查完整静态链。本包不发布 `odom→base_link` 或 `map→odom`；RTAB-Map 的 TF 发布需单独配置且每条边只有一个发布者。
 - 向厂家确认 IMU/里程计坐标轴和单位、超声波量纲/无效值、odom 定义与复位行为、协方差可用性、传感器安装外参。URDF 到位后再验证整条坐标树；拿到这些之前可以验通数据，但不能认定导航链路完成。
 - 速度仲裁、遥控优先、网络断连停车、cmd_vel 回传均属于后续控制阶段。本包不创建任何命令发布者，不收控制 UDP。
 

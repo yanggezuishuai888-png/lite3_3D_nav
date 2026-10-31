@@ -1,4 +1,6 @@
 #include "lite3_sensor_gateway/codecs.hpp"
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <cmath>
 #include <set>
 /*
@@ -259,13 +261,65 @@ sensor_msgs::msg::Image decode_color(const Bytes &b) {
   validate_color(m);
   return m;
 }
+Bytes encode_color_jpeg(const sensor_msgs::msg::Image &m, int quality) {
+  validate_color(m);
+  if (quality < 1 || quality > 100)
+    throw std::runtime_error("invalid JPEG quality");
+  cv::Mat source(m.height, m.width, CV_8UC3, const_cast<uint8_t *>(m.data.data()), m.step);
+  cv::Mat bgr;
+  if (m.encoding == "rgb8")
+    cv::cvtColor(source, bgr, cv::COLOR_RGB2BGR);
+  else
+    bgr = source;
+  Bytes jpeg;
+  if (!cv::imencode(".jpg", bgr, jpeg, {cv::IMWRITE_JPEG_QUALITY, quality}))
+    throw std::runtime_error("JPEG encoding failed");
+  Writer w;
+  header(w, m.header);
+  w.u32(m.height);
+  w.u32(m.width);
+  w.string(m.encoding);
+  w.u8(m.is_bigendian);
+  w.u32(m.step);
+  w.bytes(jpeg);
+  return w.data;
+}
+sensor_msgs::msg::Image decode_color_jpeg(const Bytes &b) {
+  Reader r(b);
+  sensor_msgs::msg::Image m;
+  header(r, m.header);
+  m.height = r.u32();
+  m.width = r.u32();
+  m.encoding = r.string();
+  m.is_bigendian = r.u8();
+  m.step = r.u32();
+  auto jpeg = r.bytes();
+  r.finish();
+  if (!m.width || !m.height || m.width > 8192 || m.height > 8192 ||
+      (m.encoding != "rgb8" && m.encoding != "bgr8") || m.is_bigendian > 1 ||
+      m.step < uint64_t(m.width) * 3 || uint64_t(m.step) * m.height > kMaxMessage - 8192)
+    throw std::runtime_error("invalid JPEG image metadata");
+  cv::Mat encoded(1, jpeg.size(), CV_8UC1, jpeg.data());
+  cv::Mat decoded = cv::imdecode(encoded, cv::IMREAD_COLOR);
+  if (decoded.empty() || decoded.cols != static_cast<int>(m.width) ||
+      decoded.rows != static_cast<int>(m.height) || decoded.type() != CV_8UC3)
+    throw std::runtime_error("invalid JPEG image dimensions");
+  if (m.encoding == "rgb8")
+    cv::cvtColor(decoded, decoded, cv::COLOR_BGR2RGB);
+  m.data.resize(uint64_t(m.step) * m.height, 0);
+  for (uint32_t row = 0; row < m.height; ++row)
+    std::memcpy(m.data.data() + uint64_t(row) * m.step, decoded.ptr(row), uint64_t(m.width) * 3);
+  validate_color(m);
+  return m;
+}
 bool is_camera_internal_tf(const geometry_msgs::msg::TransformStamped &t) {
   return (t.header.frame_id == "camera_link" &&
           (t.child_frame_id == "camera_depth_frame" ||
-           t.child_frame_id == "camera_color_frame")) ||
+           t.child_frame_id == "camera_color_frame" ||
+           t.child_frame_id == "camera_aligned_depth_to_color_frame")) ||
          (t.header.frame_id == "camera_depth_frame" &&
           t.child_frame_id == "camera_depth_optical_frame") ||
-         (t.header.frame_id == "camera_color_frame" &&
+         (t.header.frame_id == "camera_aligned_depth_to_color_frame" &&
           t.child_frame_id == "camera_color_optical_frame");
 }
 namespace {
@@ -279,7 +333,7 @@ void validate_camera_tf(const geometry_msgs::msg::TransformStamped &t) {
 }
 } // namespace
 Bytes encode_camera_tf(const tf2_msgs::msg::TFMessage &m) {
-  if (m.transforms.empty() || m.transforms.size() > 4)
+  if (m.transforms.empty() || m.transforms.size() > kCameraInternalTfCount)
     throw std::runtime_error("invalid camera TF count");
   Writer w;
   w.u8(m.transforms.size());
@@ -298,7 +352,7 @@ Bytes encode_camera_tf(const tf2_msgs::msg::TFMessage &m) {
 tf2_msgs::msg::TFMessage decode_camera_tf(const Bytes &b) {
   Reader r(b);
   const auto count = r.u8();
-  if (!count || count > 4)
+  if (!count || count > kCameraInternalTfCount)
     throw std::runtime_error("invalid camera TF count");
   tf2_msgs::msg::TFMessage m;
   std::set<std::string> children;

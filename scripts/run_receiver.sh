@@ -12,11 +12,15 @@ _lite3_receiver_run() {
     if [[ "${existing}" =~ ^[0-9]+$ ]] && kill -0 "${existing}" 2>/dev/null; then
       existing_pgid="$(ps -o pgid= -p "${existing}" 2>/dev/null | tr -d ' ')"
       existing_args="$(ps -o args= -p "${existing}" 2>/dev/null || true)"
-      if [[ "${existing_pgid}" == "${existing}" && "${existing_args}" == *"ros2 launch lite3_sensor_gateway receiver.launch.py"* ]]; then
-        printf 'Lite3 receiver is already running (PID %s).\n' "${existing}"
+      if [[ "${existing_pgid}" == "${existing}" && "${existing_args}" == *"ros2 launch lite3_sensor_gateway receiver_with_command.launch.py"* ]]; then
+        printf 'Lite3 receiver and command sender are already running (PID/PGID %s).\n' "${existing}"
         return 1
       fi
-      printf 'PID file points to a live process that is not this receiver: %s\n' "${existing}" >&2
+      if [[ "${existing_pgid}" == "${existing}" && "${existing_args}" == *"ros2 launch lite3_sensor_gateway receiver.launch.py"* ]]; then
+        printf 'Legacy receiver process group %s is running without command_sender. Stop it with scripts/stop_receiver.sh, then start this integrated launcher.\n' "${existing}" >&2
+        return 1
+      fi
+      printf 'PID file points to a live process that is not the Lite3 receiver group: %s\n' "${existing}" >&2
       return 1
     fi
     rm -f -- "${pid_file}"
@@ -28,8 +32,8 @@ _lite3_receiver_run() {
     shift
     printf "%s\n" "$$" > "${pid_file}" || exit 1
     exec "$@"
-  ' _ "${pid_file}" ros2 launch lite3_sensor_gateway receiver.launch.py \
-    "config:=${workspace}/config/receiver.pc.yaml" &
+  ' _ "${pid_file}" ros2 launch lite3_sensor_gateway receiver_with_command.launch.py \
+    "receiver_config:=${workspace}/config/receiver.pc.yaml" &
   wrapper_pid=$!
 
   for ((i=0; i<100; i++)); do
@@ -40,7 +44,7 @@ _lite3_receiver_run() {
     if ! kill -0 "${wrapper_pid}" 2>/dev/null; then
       wait "${wrapper_pid}" 2>/dev/null || true
       rm -f -- "${pid_file}"
-      printf 'Receiver process failed before recording its PID.\n' >&2
+      printf 'Gateway process failed before recording its PID.\n' >&2
       return 1
     fi
     sleep 0.05
@@ -49,7 +53,7 @@ _lite3_receiver_run() {
     kill -INT "${wrapper_pid}" 2>/dev/null || true
     wait "${wrapper_pid}" 2>/dev/null || true
     rm -f -- "${pid_file}"
-    printf 'Timed out waiting for receiver process PID.\n' >&2
+    printf 'Timed out waiting for gateway process PID.\n' >&2
     return 1
   fi
 
@@ -79,7 +83,7 @@ _lite3_receiver_run() {
   trap "_lite3_receiver_stop_group '${pid}' INT" INT
   trap "_lite3_receiver_stop_group '${pid}' TERM" TERM
 
-  printf 'Lite3 receiver process group started (PID/PGID %s). Press Ctrl+C to stop it.\n' "${pid}"
+  printf 'Lite3 receiver and command sender process group started (PID/PGID %s). Press Ctrl+C to stop both.\n' "${pid}"
   wait "${wrapper_pid}"
   status=$?
 

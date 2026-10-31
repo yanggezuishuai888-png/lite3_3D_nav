@@ -41,24 +41,29 @@
     <!-- Physical sensor mounting frames in the TORSO/body coordinate system.
          x: forward, y: left, z: up; negative pitch points the sensor downward. -->
     <link name="D435I_LINK"/>
-    <joint name="D435I_FIXED" type="fixed" dont_collapse="true">
+    <joint name="D435I_FIXED" type="fixed">
         <parent link="TORSO"/>
         <child link="D435I_LINK"/>
-        <origin xyz="0.25228 -0.00050 0.07410" rpy="0 -0.3490658504 0"/>
+        <!-- <origin xyz="0.25228 -0.00050 0.07410" rpy="0 -0.3490658504 0"/> -->
+        <origin xyz="0.25489 0 0.07249" rpy="0 0.34907 0"/>
     </joint>
-    <!-- Add D435I_LINK -> camera_link only after its transform is supplied. -->
-
-    <link name="MID360_LINK"/>
+    <link name="camera_link"/>
+    <joint name="D435I_TO_CAMERA_FIXED" type="fixed">
+        <parent link="D435I_LINK"/>
+        <child link="camera_link"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+    <!-- <link name="MID360_LINK"/>
     <joint name="MID360_FIXED" type="fixed" dont_collapse="true">
         <parent link="TORSO"/>
         <child link="MID360_LINK"/>
         <origin xyz="0.18678 0 0.12498" rpy="0 -0.2617993878 0"/>
-    </joint>
+    </joint> -->
 
-    <link name="IMU_LINK"/>
+    <link name="imu_link"/>
     <joint name="IMU_FIXED" type="fixed" dont_collapse="true">
-        <parent link="TORSO"/>
-        <child link="IMU_LINK"/>
+        <parent link="base_link"/>
+        <child link="imu_link"/>
         <origin xyz="0.005 0 0" rpy="0 0 0"/>
     </joint>
 	

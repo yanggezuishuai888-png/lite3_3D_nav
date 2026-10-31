@@ -12,12 +12,13 @@ if [[ ! -f "${_lite3_workspace}/install/local_setup.bash" ]]; then
   return 1 2>/dev/null || exit 1
 fi
 
-# Keep dog-side discovery and CycloneDDS settings out of the PC session.
+# Keep dog-side discovery and CycloneDDS interface settings out of the PC session.
 unset ROS_DISCOVERY_SERVER CYCLONEDDS_URI ROS_LOCALHOST_ONLY RMW_IMPLEMENTATION
 unset AMENT_PREFIX_PATH CMAKE_PREFIX_PATH COLCON_PREFIX_PATH ROS_DISTRO
 source /opt/ros/jazzy/setup.bash
 source "${_lite3_workspace}/install/local_setup.bash"
 export ROS_DOMAIN_ID=74
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 export LITE3_WORKSPACE="${_lite3_workspace}"
 unset _lite3_script_dir _lite3_workspace

@@ -7,7 +7,7 @@
 namespace lite3_gateway {
 bool valid_type(Type t) {
   auto n = static_cast<uint8_t>(t);
-  return (n >= 1 && n <= 22);
+  return (n >= 1 && n <= 23);
 }
 const char *type_name(Type t) {
   switch (t) {
@@ -41,6 +41,8 @@ const char *type_name(Type t) {
     return "clock_status";
   case Type::CameraTf:
     return "camera_tf";
+  case Type::CmdVel:
+    return "cmd_vel";
   default:
     return "sensor_status";
   }
@@ -50,7 +52,8 @@ uint32_t checksum(const Bytes &b) {
 }
 std::vector<Bytes> fragment(const Envelope &e, const Bytes &payload) {
   if (!valid_type(e.type) || payload.empty() || payload.size() > kMaxMessage || !e.session ||
-      !e.sequence)
+      !e.sequence || (e.flags == 1 && !is_depth(e.type)) ||
+      (e.flags == 2 && e.type != Type::Color) || e.flags > 2)
     throw std::runtime_error("invalid message");
   const size_t count = (payload.size() + kChunkSize - 1) / kChunkSize;
   const auto crc = checksum(payload);
@@ -101,11 +104,12 @@ Fragment parse_fragment(const Bytes &packet) {
   f.count = r.u16();
   auto len = r.u16();
   auto reserved = r.u16();
-  if (!valid_type(f.env.type) || static_cast<uint8_t>(f.env.clock) > 2 || f.env.flags > 1 ||
+  if (!valid_type(f.env.type) || static_cast<uint8_t>(f.env.clock) > 2 || f.env.flags > 2 ||
       reserved || !f.env.session || !f.env.sequence || !f.total || f.total > kMaxMessage)
     throw std::runtime_error("invalid header");
-  if (f.env.flags && !is_depth(f.env.type))
-    throw std::runtime_error("compression only allowed for depth");
+  if ((f.env.flags == 1 && !is_depth(f.env.type)) ||
+      (f.env.flags == 2 && f.env.type != Type::Color))
+    throw std::runtime_error("invalid compression for stream");
   if (f.count != (f.total + kChunkSize - 1) / kChunkSize || f.index >= f.count ||
       len != std::min(kChunkSize, size_t(f.total) - size_t(f.index) * kChunkSize) ||
       r.remaining() != len)

@@ -10,15 +10,16 @@
     subscribe_rgb: true             # 订阅RGB图像
     subscribe_depth: true           # 订阅深度图像
     subscribe_rgbd: false            # 不订阅预同步RGBD消息
+    subscribe_imu: true              # 接收IMU，用于图优化中的重力约束
     approx_sync: true               # 使用近似时间同步
     sync_queue_size: 10             # 消息同步队列大小
 
     ############################
     # 数据库
     ############################
-    database_path: "/home/ruming/ros2_ws/src/rtabmap_robot/db/market1-1.db"  # 地图数据库路径
+    database_path: "/home/ruming/ros2_ws/src/rtabmap_robot/db/lite3_live.db"
+    delete_db_on_start: true         # 每次启动清空同一路径的旧地图
 
-    ############################
     # 视觉特征与配准
     ############################
     Vis/MinInliers: "15"             # 视觉匹配最少内点数量

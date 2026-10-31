@@ -9,4 +9,6 @@ lite3_gateway_receiver:
     output_prefix: /lite3
     timestamp_policy: source  # 使用狗端已转换为系统时间的测量时间戳
     camera_timestamp_policy: source  # 保留相机 RGB/对齐深度原始时间戳供配对
+    image_qos_depth: 10  # PC 图像发布历史队列深度
+    image_qos_reliable: false  # PC 本机图像可靠传输（默认使用传感器 Best Effort）
     stale_timeout: 2.5

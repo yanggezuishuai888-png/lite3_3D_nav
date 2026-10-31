@@ -64,6 +64,20 @@ int main() {
     Writer w;
     w.u32(0x01020304);
     check(w.data == Bytes({1, 2, 3, 4}));
+    e.type = Type::Color;
+    e.flags = 2;
+    auto jpeg_packets = fragment(e, Bytes{1, 2, 3});
+    check(parse_fragment(jpeg_packets[0]).env.flags == 2);
+    e.type = Type::Depth;
+    rejects([&] { fragment(e, Bytes{1, 2, 3}); });
+    e.flags = 0;
+    e.type = Type::CmdVel;
+    e.sequence = 27;
+    e.clock = ClockDomain::System;
+    e.source_ns = 1000000000ULL;
+    Bytes command(48, 0);
+    auto control = fragment(e, command);
+    check(control.size() == 1 && parse_fragment(control[0]).env.type == Type::CmdVel);
     std::cout << "protocol tests passed\n";
   } catch (const std::exception &e) {
     std::cerr << e.what() << '\n';

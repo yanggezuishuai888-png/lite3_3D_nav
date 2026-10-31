@@ -122,7 +122,8 @@ int main(int argc, char **argv) {
             }
             children.insert(t.child_frame_id);
           }
-          if (children.size() == 4 && m->transforms.size() == 4)
+          if (children.size() == lite3_gateway::kCameraInternalTfCount &&
+              m->transforms.size() == lite3_gateway::kCameraInternalTfCount)
             seen.insert("camera_tf");
         }));
     subs.push_back(n->create_subscription<std_msgs::msg::Bool>(
@@ -140,7 +141,8 @@ int main(int argc, char **argv) {
         "/lite3/leg_odom2", qos, [&](nav_msgs::msg::Odometry::ConstSharedPtr m) {
           auto stamp = lite3_gateway::stamp_ns(m->header.stamp);
           auto now = static_cast<uint64_t>(n->get_clock()->now().nanoseconds());
-          if (m->twist.twist.linear.x == .75 && m->child_frame_id == "base_test" &&
+          if (m->twist.twist.linear.x == .75 && m->header.frame_id == "odom" &&
+              m->child_frame_id == "base_link" &&
               stamp > now - 2000000000ULL && stamp < now + 100000000ULL)
             seen.insert("odom");
         }));
@@ -260,7 +262,8 @@ int main(int argc, char **argv) {
            std::pair<const char *, const char *>{"camera_link", "camera_depth_frame"},
            {"camera_depth_frame", "camera_depth_optical_frame"},
            {"camera_link", "camera_color_frame"},
-           {"camera_color_frame", "camera_color_optical_frame"},
+           {"camera_link", "camera_aligned_depth_to_color_frame"},
+           {"camera_aligned_depth_to_color_frame", "camera_color_optical_frame"},
            {"base_link", "camera_link"}}) {
     geometry_msgs::msg::TransformStamped t;
     t.header.frame_id = edge.first;
@@ -276,7 +279,7 @@ int main(int argc, char **argv) {
   a.orientation_covariance[0] = -1;
   nav_msgs::msg::Odometry b;
   b.header = a.header;
-  b.child_frame_id = "base_test";
+  b.header.frame_id.clear();
   b.twist.twist.linear.x = .75;
   geometry_msgs::msg::Twist c;
   c.angular.z = -.25;

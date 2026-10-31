@@ -1,3 +1,5 @@
+# PC 接收配置：绑定 10.42.0.1，只接受来自 10.42.0.2 的数据，
+# 默认 ROS 输出前缀 /lite3。
 lite3_gateway_receiver:
   ros__parameters:
     bind_ip: "10.42.0.1"
@@ -5,6 +7,9 @@ lite3_gateway_receiver:
     telemetry_port: 45001
     image_port: 45003
     output_prefix: /lite3
-    timestamp_policy: source
-    camera_timestamp_policy: source
+    timestamp_policy: source  # 使用狗端已转换为系统时间的测量时间戳
+    camera_timestamp_policy: source  # 保留相机 RGB/对齐深度原始时间戳供配对
+    image_qos_depth: 10  # PC 图像发布历史队列深度
+    rgbd_image_qos_depth: 1  # RGB 和对齐深度：Keep Last(1)
+    image_qos_reliable: false  # 图像使用 Best Effort
     stale_timeout: 2.5

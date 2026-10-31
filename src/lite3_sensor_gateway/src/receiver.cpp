@@ -1,4 +1,5 @@
 #include "lite3_sensor_gateway/codecs.hpp"
+#include "lite3_sensor_gateway/frame_trace.hpp"
 #include "lite3_sensor_gateway/net.hpp"
 #include "lite3_sensor_gateway/time_sync.hpp"
 #include <cmath>
@@ -23,6 +24,7 @@ struct Stream {
 };
 class Receiver : public rclcpp::Node {
   std::unique_ptr<Socket> telemetry_, images_;
+  std::unique_ptr<FrameTrace> frame_trace_;
   sockaddr_in peer_{};
   Reassembler small_, large_;
   uint64_t session_ = 0, invalid_ = 0, foreign_ = 0, old_ = 0;
@@ -93,8 +95,12 @@ class Receiver : public rclcpp::Node {
     if ((m.env.type == Type::Imu || m.env.type == Type::Odom ||
          m.env.type == Type::Depth || m.env.type == Type::Color ||
          m.env.type == Type::AlignedDepth || m.env.type == Type::CameraInfo ||
-         m.env.type == Type::ColorInfo || m.env.type == Type::AlignedInfo) && !time_ready())
+         m.env.type == Type::ColorInfo || m.env.type == Type::AlignedInfo) && !time_ready()) {
+      if (is_image(m.env.type))
+        frame_trace_->record("pc_gate_rejected", m.env.type, m.env.sequence,
+                             m.env.source_ns, m.payload.size());
       return;
+    }
     switch (m.env.type) {
     case Type::Heartbeat: {
       Reader r(m.payload);
@@ -118,6 +124,10 @@ class Receiver : public rclcpp::Node {
       if (!m.env.raw_source_ns)
         throw std::runtime_error("missing original motion timestamp");
       timestamp(v, source_time_);
+      if (v.header.frame_id.empty())
+        v.header.frame_id = "odom";
+      if (v.child_frame_id.empty())
+        v.child_frame_id = "base_link";
       odom_->publish(v);
       break;
     }
@@ -160,6 +170,8 @@ class Receiver : public rclcpp::Node {
     case Type::Depth: {
       double scale;
       auto v = decode_depth(m.env.flags ? decompress_payload(m.payload) : m.payload, scale);
+      frame_trace_->record("pc_decoded", m.env.type, m.env.sequence,
+                           m.env.source_ns, v.data.size());
       check_source_stamp(m, v.header.stamp);
       timestamp(v, camera_source_time_);
       repeat_info(info_, have_info_, calibration_, v);
@@ -167,19 +179,27 @@ class Receiver : public rclcpp::Node {
       units.data = scale;
       scale_->publish(units);
       depth_->publish(v);
+      frame_trace_->record("pc_ros_published", m.env.type, m.env.sequence,
+                           m.env.source_ns, v.data.size());
       break;
     }
     case Type::Color: {
-      auto v = decode_color(m.payload);
+      auto v = m.env.flags == 2 ? decode_color_jpeg(m.payload) : decode_color(m.payload);
+      frame_trace_->record("pc_decoded", m.env.type, m.env.sequence,
+                           m.env.source_ns, v.data.size());
       check_source_stamp(m, v.header.stamp);
       timestamp(v, camera_source_time_);
       repeat_info(color_info_, have_color_info_, color_calibration_, v);
       color_->publish(v);
+      frame_trace_->record("pc_ros_published", m.env.type, m.env.sequence,
+                           m.env.source_ns, v.data.size());
       break;
     }
     case Type::AlignedDepth: {
       double scale;
       auto v = decode_depth(m.env.flags ? decompress_payload(m.payload) : m.payload, scale);
+      frame_trace_->record("pc_decoded", m.env.type, m.env.sequence,
+                           m.env.source_ns, v.data.size());
       check_source_stamp(m, v.header.stamp);
       timestamp(v, camera_source_time_);
       repeat_info(aligned_info_, have_aligned_info_, aligned_calibration_, v);
@@ -187,6 +207,8 @@ class Receiver : public rclcpp::Node {
       units.data = scale;
       scale_->publish(units);
       aligned_depth_->publish(v);
+      frame_trace_->record("pc_ros_published", m.env.type, m.env.sequence,
+                           m.env.source_ns, v.data.size());
       break;
     }
     case Type::ClockStatus:
@@ -196,7 +218,7 @@ class Receiver : public rclcpp::Node {
       break;
     case Type::CameraTf: {
       auto transforms = decode_camera_tf(m.payload);
-      if (transforms.transforms.size() != 4)
+      if (transforms.transforms.size() != kCameraInternalTfCount)
         throw std::runtime_error("incomplete camera internal TF");
       for (auto &transform : transforms.transforms)
         transform.header.stamp = now();
@@ -204,7 +226,7 @@ class Receiver : public rclcpp::Node {
       break;
     }
     default: {
-      if (static_cast<int>(m.env.type) < 16)
+      if (static_cast<int>(m.env.type) < 16 || static_cast<int>(m.env.type) > 22)
         throw std::runtime_error("unexpected control message");
       std_msgs::msg::Bool v;
       v.data = decode_bool(m.payload);
@@ -258,6 +280,9 @@ class Receiver : public rclcpp::Node {
       }
       try {
         auto f = parse_fragment(Bytes(buffer, buffer + n));
+        if (image && f.index == 0)
+          frame_trace_->record("pc_udp_first", f.env.type, f.env.sequence,
+                               f.env.source_ns, f.total);
         if (!image && f.env.type == Type::TimeRequest) {
           respond_time_probe(socket, f, from, receive_system_ns);
           continue;
@@ -305,6 +330,9 @@ class Receiver : public rclcpp::Node {
         Message message;
         if (!(image ? large_ : small_).accept(f, steady_seconds(), message))
           continue;
+        if (image)
+          frame_trace_->record("pc_reassembled", message.env.type, message.env.sequence,
+                               message.env.source_ns, message.payload.size());
         publish(message);
         if (s.sequence && message.env.sequence > s.sequence + 1)
           s.gaps += message.env.sequence - s.sequence - 1;
@@ -430,27 +458,42 @@ public:
     if (!source_time_ || !camera_source_time_)
       throw std::runtime_error("time sync requires source timestamp policies");
     reply_time_probes_ = declare_parameter<bool>("reply_time_probes", true);
+    frame_trace_.reset(new FrameTrace(declare_parameter<std::string>("image_trace_file", "")));
     peer_ = address(sender, 0);
     telemetry_.reset(new Socket(bind, tp));
     images_.reset(new Socket(bind, ip));
     auto sensor = rclcpp::SensorDataQoS().keep_last(5);
     auto reliable = rclcpp::QoS(1).reliable();
+    const auto image_qos_depth = declare_parameter<int>("image_qos_depth", 10);
+    if (image_qos_depth < 1 || image_qos_depth > 100)
+      throw std::runtime_error("image_qos_depth must be 1..100");
+    const auto rgbd_image_qos_depth =
+        declare_parameter<int>("rgbd_image_qos_depth", image_qos_depth);
+    if (rgbd_image_qos_depth < 1 || rgbd_image_qos_depth > 100)
+      throw std::runtime_error("rgbd_image_qos_depth must be 1..100");
+    auto image_qos = rclcpp::SensorDataQoS().keep_last(image_qos_depth);
+    auto rgbd_image_qos = image_qos;
+    rgbd_image_qos.keep_last(rgbd_image_qos_depth);
+    if (declare_parameter<bool>("image_qos_reliable", false)) {
+      image_qos.reliable();
+      rgbd_image_qos.reliable();
+    }
     imu_ = create_publisher<sensor_msgs::msg::Imu>(prefix_ + "/imu/data", sensor);
     odom_ = create_publisher<nav_msgs::msg::Odometry>(prefix_ + "/leg_odom2", sensor);
     handle_ = create_publisher<geometry_msgs::msg::Twist>(prefix_ + "/handle_state", sensor);
     ultrasound_ =
         create_publisher<std_msgs::msg::Float64>(prefix_ + "/ultrasound_distance", sensor);
     depth_ = create_publisher<sensor_msgs::msg::Image>(prefix_ + "/camera/depth/image_rect_raw",
-                                                       rclcpp::SensorDataQoS().keep_last(2));
+                                                       image_qos);
     calibration_ = create_publisher<sensor_msgs::msg::CameraInfo>(
         prefix_ + "/camera/depth/camera_info", reliable);
     color_ = create_publisher<sensor_msgs::msg::Image>(
-        prefix_ + "/camera/color/image_raw", rclcpp::SensorDataQoS().keep_last(2));
+        prefix_ + "/camera/color/image_raw", rgbd_image_qos);
     color_calibration_ = create_publisher<sensor_msgs::msg::CameraInfo>(
         prefix_ + "/camera/color/camera_info", reliable);
     aligned_depth_ = create_publisher<sensor_msgs::msg::Image>(
         prefix_ + "/camera/aligned_depth_to_color/image_raw",
-        rclcpp::SensorDataQoS().keep_last(2));
+        rgbd_image_qos);
     aligned_calibration_ = create_publisher<sensor_msgs::msg::CameraInfo>(
         prefix_ + "/camera/aligned_depth_to_color/camera_info", reliable);
     scale_ = create_publisher<std_msgs::msg::Float64>(prefix_ + "/camera/depth/scale_m", reliable);

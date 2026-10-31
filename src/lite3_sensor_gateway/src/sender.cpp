@@ -294,7 +294,7 @@ class Sender : public rclcpp::Node {
       status.clock_jumps = mapper_.jumps();
       queue(Type::ClockStatus, wall, ClockDomain::System,
             [status] { return encode_clock_status(status); });
-      if (camera_transforms_.size() == 4) {
+      if (camera_transforms_.size() == kCameraInternalTfCount) {
         tf2_msgs::msg::TFMessage transforms;
         for (const auto &entry : camera_transforms_)
           transforms.transforms.push_back(entry.second);

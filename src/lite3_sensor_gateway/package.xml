@@ -15,6 +15,7 @@
   <depend>tf2_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>zlib</depend>
+  <depend>libopencv-dev</depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
