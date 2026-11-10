@@ -18,4 +18,8 @@ __pycache__/
 *.swp
 .DS_Store
 
-MBRA_PG_Official/
+mbra/
+
+diagnostics/
+
+/src/rtabmap_robot/db/

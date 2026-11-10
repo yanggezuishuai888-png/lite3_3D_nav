@@ -45,7 +45,8 @@
         <parent link="TORSO"/>
         <child link="D435I_LINK"/>
         <!-- <origin xyz="0.25228 -0.00050 0.07410" rpy="0 -0.3490658504 0"/> -->
-        <origin xyz="0.25489 0 0.07249" rpy="0 0.34907 0"/>
+        <!-- <origin xyz="0.25489 0 0.07249" rpy="0 0.34907 0"/> -->
+        <origin xyz="0.11842 0.01700 0.12788" rpy="0 0.20106 0"/>
     </joint>
     <link name="camera_link"/>
     <joint name="D435I_TO_CAMERA_FIXED" type="fixed">
