@@ -4,9 +4,9 @@
     # ROS接口参数
     ############################
     frame_id: "base_link"          # 机器人基座坐标系
-    odom_frame_id: "odom"          # 非空：通过TF获取里程计
+    odom_frame_id: "vo"            # 完整TF链：map → vo → ekf_odom → base_link
     map_frame_id: "map"             # 全局地图坐标系
-    publish_tf: true                # 开启 map → odom TF发布
+    publish_tf: true                # 后端回环/图优化发布 map → vo 全局修正
     subscribe_rgb: true             # 订阅RGB图像
     subscribe_depth: true           # 订阅深度图像
     subscribe_rgbd: false            # 不订阅预同步RGBD消息
@@ -30,6 +30,7 @@
     ############################
     RGBD/NeighborLinkRefining: "true"  # 优化相邻关键帧约束
     RGBD/ProximityBySpace: "true"      # 开启空间近邻检测
+    RGBD/ForceOdom3DoF: "true"        # 保留四足机身的z、roll、pitch运动
 
     ############################
     # 回环检测与内存管理
@@ -41,6 +42,8 @@
     # 图优化
     ############################
     RGBD/OptimizeFromGraphEnd: "false" # 不从图末端开始优化
+    Optimizer/Strategy: "2"             # GTSAM，支持IMU重力约束
+    Optimizer/GravitySigma: "0.3"       # 用IMU orientation约束roll/pitch
 
     ############################
     # 栅格建图
@@ -54,6 +57,7 @@
     ############################
     RGBD/ProximityPathMaxNeighbors: "0" # 禁用基于局部路径的多对一近邻检测
     Reg/Strategy: "0"                  # 配准策略：0=视觉
+    Reg/Force3DoF: "true"             # 使用完整6DoF配准与回环约束
 
 
 /rtabmap/rgbd_odometry:
@@ -62,12 +66,14 @@
     # 视觉里程计接口
     ############################
     frame_id: "base_link"             # 机器人基座坐标系
-    odom_frame_id: "odom"             # 视觉里程计坐标系
-    publish_tf: true                  # 开启 odom → base_link TF发布
+    odom_frame_id: "vo"               # 视觉修正坐标系
+    publish_tf: true                   # 发布 vo → ekf_odom 视觉修正
+    guess_frame_id: "ekf_odom"        # EKF里程计作为视觉配准运动先验
 
     ############################
     # 视觉里程计参数
     ############################
     Odom/Strategy: "0"                # 里程计策略：0=帧到地图
+    Reg/Force3DoF: "true"            # RGB-D视觉里程计估计完整6DoF
     Vis/MinInliers: "15"              # 视觉匹配最少内点数量
     Kp/DetectorStrategy: "6"          # 特征检测策略：6=GFTT/BRIEF

@@ -98,6 +98,12 @@ def generate_launch_description():
         "static_tf.launch.py",
     )
 
+    ekf_launch_path = os.path.join(
+        get_package_share_directory("ekf_pkg"),
+        "launch",
+        "ekf.launch.py",
+    )
+
     ############################
     # 4. RTAB-Map启动参数
     ############################
@@ -119,6 +125,11 @@ def generate_launch_description():
         "odom_frame_id": rtabmap_parameters["odom_frame_id"],
         "vo_frame_id": odometry_parameters["odom_frame_id"],
         "map_frame_id": rtabmap_parameters["map_frame_id"],
+        # Keep visual odometry separate from the EKF output.  With
+        # odom_frame_id=vo, RTAB-Map consumes the vo->base_link TF chain;
+        # this topic remains the visual odometry node's own output.
+        "odom_topic": "/rtabmap/visual_odom",
+        "odom_guess_frame_id": odometry_parameters["guess_frame_id"],
 
         # TF发布
         "publish_tf_map": _launch_value(
@@ -157,7 +168,7 @@ def generate_launch_description():
             camera_parameters["subscribe_rgbd"]
         ),
 
-        # 启用RGB-D视觉里程计
+        # RGB-D视觉里程计使用EKF作为运动先验并发布视觉修正。
         "visual_odometry": "true",
 
         # RTAB-Map数据库
@@ -217,7 +228,14 @@ def generate_launch_description():
         ),
 
         ############################
-        # 6. 启动urdf_pkg静态TF
+        # 6. 足式平移 + IMU yaw EKF
+        ############################
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(ekf_launch_path),
+        ),
+
+        ############################
+        # 7. 启动urdf_pkg静态TF
         ############################
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -229,7 +247,7 @@ def generate_launch_description():
         ),
 
         ############################
-        # 7. 启动RTAB-Map
+        # 8. 启动RTAB-Map（仅消费EKF里程计）
         ############################
         GroupAction(
             actions=[

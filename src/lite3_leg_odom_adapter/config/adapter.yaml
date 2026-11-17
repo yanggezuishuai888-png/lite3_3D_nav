@@ -1,0 +1,24 @@
+leg_odom_adapter:
+  ros__parameters:
+    input_odom_topic: "/lite3/leg_odom2"
+    time_valid_topic: "/lite3/gateway/time_valid"
+    output_odom_topic: "/lite3/leg_odom_validated"
+
+    expected_input_frame: "odom"
+    output_frame: "leg_odom"
+    base_frame: "base_link"
+
+    require_time_valid: true
+    planarize: true
+    max_past_age_seconds: 0.25
+    max_future_age_seconds: 0.05
+
+    # A step this large cannot be a valid 200 Hz Lite3 odometry update.
+    # It latches a fault so a source reset cannot silently corrupt a map.
+    max_position_step_m: 0.50
+    max_yaw_step_rad: 1.00
+    max_linear_speed_mps: 3.00
+    max_angular_speed_radps: 5.00
+
+    diagnostic_period_seconds: 1.0
+    recent_sample_seconds: 0.50

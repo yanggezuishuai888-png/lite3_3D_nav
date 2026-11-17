@@ -1,0 +1,24 @@
+ekf_input_adapter:
+  ros__parameters:
+    leg_odom_input_topic: "/lite3/leg_odom2"
+    imu_input_topic: "/lite3/imu/data"
+    leg_odom_output_topic: "/ekf/leg_odom"
+    imu_output_topic: "/ekf/imu"
+    odom_frame: "ekf_odom"
+    input_odom_frame: "odom"
+    base_frame: "base_link"
+
+    max_past_age_seconds: 0.25
+    max_future_age_seconds: 0.05
+
+    # Initial engineering values, expressed as variance rather than standard deviation.
+    # Tune these only after a measured stationary/known-motion calibration.
+    leg_position_variance: 0.01       # sigma = 0.10 m
+    # This is a pseudo-measurement in the local EKF frame, not the vendor's
+    # constant 0.326 m field and not a claim that real body height is observed.
+    leg_z_constraint_variance: 0.01   # z=0 constraint, sigma = 0.10 m
+    # Initial engineering values for all three attitude/rate axes. Replace
+    # them with measured stationary and known-rotation variances before
+    # treating the estimate as calibrated.
+    imu_orientation_variance: 0.0025  # sigma = 0.05 rad
+    imu_angular_velocity_variance: 0.0004 # sigma = 0.02 rad/s

@@ -1,0 +1,57 @@
+ekf_filter_node:
+  ros__parameters:
+    frequency: 50.0
+    sensor_timeout: 0.1
+    # Lite3 is not a planar rigid base: keep IMU roll/pitch and allow the
+    # downstream visual odometry to estimate full 6DoF motion. The filter has
+    # no real height observation, so a z=0 pseudo-measurement keeps only its
+    # local vertical state bounded; visual odometry remains responsible for
+    # real scene elevation through its correction frame.
+    two_d_mode: false
+    transform_time_offset: 0.0
+    transform_timeout: 0.0
+    print_diagnostics: true
+    debug: false
+    publish_acceleration: false
+    publish_tf: true
+    permit_corrected_publication: false
+    reset_on_time_jump: true
+
+    map_frame: "map"
+    odom_frame: "ekf_odom"
+    base_link_frame: "base_link"
+    world_frame: "ekf_odom"
+
+    # The vendor leg yaw is deliberately excluded. Position x/y anchors the
+    # translation. The adapter also supplies a z=0 pseudo-measurement so that
+    # disabling two_d_mode to retain roll/pitch does not leave z/vz/az wholly
+    # unobservable and numerically unstable.
+    odom0: "/ekf/leg_odom"
+    odom0_config: [true,  true,  true,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    odom0_queue_size: 20
+    odom0_nodelay: true
+    odom0_differential: false
+    odom0_relative: false
+
+    # The IMU is already expressed in base_link. Fuse its full orientation and
+    # all three angular rates. Linear acceleration is intentionally excluded:
+    # it contains gravity and the quadruped gait adds large impulsive motion.
+    imu0: "/ekf/imu"
+    imu0_config: [false, false, false,
+                  true,  true,  true,
+                  false, false, false,
+                  true,  true,  true,
+                  false, false, false]
+    imu0_queue_size: 40
+    imu0_nodelay: true
+    imu0_differential: false
+    # The vendor orientation and leg odometry use the same odom reference
+    # (their yaw values agree in live samples), so keep the absolute attitude.
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: false
+
+    use_control: false

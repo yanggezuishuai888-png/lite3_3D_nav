@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>ekf_pkg</name>
+  <version>0.1.0</version>
+  <description>Lite3 planar leg odometry and IMU yaw fusion using robot_localization.</description>
+  <maintainer email="ruming@example.com">ruming</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>nav_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>robot_localization</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
