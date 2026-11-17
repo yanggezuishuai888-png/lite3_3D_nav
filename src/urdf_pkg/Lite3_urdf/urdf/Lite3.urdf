@@ -38,8 +38,14 @@
         </collision>
     </link>
 
-    <!-- Physical sensor mounting frames in the TORSO/body coordinate system.
-         x: forward, y: left, z: up; negative pitch points the sensor downward. -->
+    <!-- 相机标定参考坐标系 -->
+    <link name="calib_datum"/>
+    <joint name="base_to_calib_datum" type="fixed">
+        <parent link="base_link"/>
+        <child link="calib_datum"/>
+        <origin xyz="0.10456 0.04026 0.07006" rpy="0 0 0"/>
+    </joint>
+
     <link name="D435I_LINK"/>
     <joint name="D435I_FIXED" type="fixed">
         <parent link="TORSO"/>

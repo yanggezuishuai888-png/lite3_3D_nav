@@ -20,23 +20,44 @@
     database_path: "/home/ruming/ros2_ws/src/rtabmap_robot/db/lite3_live.db"
     delete_db_on_start: true         # 每次启动清空同一路径的旧地图
 
-    # 视觉特征与配准
+    # 视觉特征与配准（回环/邻近帧约束）
     ############################
-    Vis/MinInliers: "15"             # 视觉匹配最少内点数量
-    Kp/DetectorStrategy: "6"         # 特征检测策略：6=GFTT/BRIEF
+    Vis/FeatureType: "8"             # 视觉配准特征：8=GFTT/ORB，比BRIEF更适合四足机器人的滚转/俯仰运动
+    Vis/CorType: "0"                 # 特征对应方式：0=描述子匹配，1=光流
+    Vis/CorNNType: "1"               # 最近邻搜索：1=FLANN KD-Tree
+    Vis/CorNNDR: "0.8"               # 最近邻比率检验阈值，越小越严格
+    Vis/EstimationType: "1"          # 位姿估计：1=3D→2D PnP，适合RGB-D
+    Vis/PnPReprojError: "3.0"        # PnP RANSAC最大重投影误差，单位为像素
+    Vis/Iterations: "300"            # 视觉RANSAC最大迭代次数
+    Vis/MinInliers: "20"             # 接受视觉约束的最少内点数，低于此值拒绝约束
+    Vis/MinInliersDistribution: "0.0" # 内点图像分布下限；0=暂不额外限制，避免走廊场景过度拒绝
+    Vis/MinDepth: "0.2"              # 参与视觉配准的最小深度，单位m
+    Vis/MaxDepth: "8.0"              # 参与视觉配准的最大深度，限制D435i远距离噪声
+    Kp/DetectorStrategy: "8"         # 回环词袋特征：8=GFTT/ORB，与视觉里程计保持一致
+    Kp/MaxFeatures: "1000"           # 每帧最多提取的特征数，提高走廊与低纹理场景的可用特征数
+    Kp/GridRows: "2"                 # 将图像纵向分为2区，避免特征过度集中
+    Kp/GridCols: "2"                 # 将图像横向分为2区，改善PnP特征空间分布
+    Vis/GridRows: "2"             # VO特征纵向分区
+    Vis/GridCols: "2"             # VO特征横向分区
+
 
     ############################
     # RGB-D SLAM
     ############################
-    RGBD/NeighborLinkRefining: "true"  # 优化相邻关键帧约束
-    RGBD/ProximityBySpace: "true"      # 开启空间近邻检测
-    RGBD/ForceOdom3DoF: "true"        # 保留四足机身的z、roll、pitch运动
+    RGBD/NeighborLinkRefining: "true"  # 用视觉配准精修相邻关键帧约束
+    RGBD/ProximityBySpace: "true"      # 检测空间上接近的历史节点，用于局部回环
+    RGBD/ProximityPathMaxNeighbors: "0" # 不按路径额外扩展近邻数，降低重复走廊中的错误近邻约束
+    RGBD/ForceOdom3DoF: "true"        # 后端只使用里程计x、y、yaw，不让RTAB-Map修改EKF的z、roll、pitch
+    RGBD/LinearUpdate: "0.10"         # 平移至少0.10m才向位姿图加入新节点
+    RGBD/AngularUpdate: "0.10"        # 旋转至少0.10rad（约5.7度）才向位姿图加入新节点
+    RGBD/OptimizeMaxError: "3.0"      # 回环加入后误差/标准差比值超过3时拒绝该回环
 
     ############################
     # 回环检测与内存管理
     ############################
     Mem/IncrementalMemory: "true"     # 增量建图模式
     Mem/InitWMWithAllNodes: "false"   # 不将全部历史节点载入工作记忆
+    Mem/UseOdomFeatures: "true"       # 复用视觉里程计特征，避免后端重复提取不一致特征
 
     ############################
     # 图优化
@@ -44,20 +65,28 @@
     RGBD/OptimizeFromGraphEnd: "false" # 不从图末端开始优化
     Optimizer/Strategy: "2"             # GTSAM，支持IMU重力约束
     Optimizer/GravitySigma: "0.3"       # 用IMU orientation约束roll/pitch
+    Optimizer/Robust: "true"            # 使用鲁棒图优化抑制错误回环，但不代替里程计质量检查
 
     ############################
     # 栅格建图
     ############################
     Grid/Sensor: "1"                  # 使用深度图生成栅格
     Grid/CellSize: "0.05"             # 栅格分辨率：5cm
-    Grid/RangeMax: "5.0"               # 最大建图距离：5m
+    Grid/RangeMin: "0.25"             # 忽略距相机0.25m以内的无效/边缘深度
+    Grid/RangeMax: "4.0"              # 栅格最大深度距离，减少D435i远距离飞点
+    Grid/DepthDecimation: "4"         # 生成栅格前将深度图4倍降采样，降低计算量与点云密度
+    Grid/PreVoxelFiltering: "true"    # 地面/障碍分割前先体素降采样
+    Grid/NormalsSegmentation: "true"  # 利用点云法向区分地面和障碍物
+    Grid/MaxGroundAngle: "45"         # 法向与重力方向夹角不超过45度时允许判为地面
+    Grid/MinClusterSize: "10"         # 障碍物聚类最少点数，过小的聚类不投影到栅格
+    Grid/NoiseFilteringRadius: "0.10" # 半径0.10m的离群点滤波，主要清除孤立深度飞点
+    Grid/NoiseFilteringMinNeighbors: "5" # 0.10m内少于5个邻点的点会被删除
 
     ############################
     # 配准与近邻检测
     ############################
-    RGBD/ProximityPathMaxNeighbors: "0" # 禁用基于局部路径的多对一近邻检测
     Reg/Strategy: "0"                  # 配准策略：0=视觉
-    Reg/Force3DoF: "true"             # 使用完整6DoF配准与回环约束
+    Reg/Force3DoF: "true"             # 将后端配准/回环约束限制为x、y、yaw，z、roll、pitch不参与修正
 
 
 /rtabmap/rgbd_odometry:
@@ -73,7 +102,44 @@
     ############################
     # 视觉里程计参数
     ############################
-    Odom/Strategy: "0"                # 里程计策略：0=帧到地图
-    Reg/Force3DoF: "true"            # RGB-D视觉里程计估计完整6DoF
-    Vis/MinInliers: "15"              # 视觉匹配最少内点数量
-    Kp/DetectorStrategy: "6"          # 特征检测策略：6=GFTT/BRIEF
+    Odom/Strategy: "0"                # 里程计策略：0=Frame-to-Map，当前帧与局部特征地图配准
+    Odom/ResetCountdown: "5"          # 连续5个已处理帧位姿估计失败后重建局部里程计地图；0=禁用自动重置
+    Odom/GuessMotion: "true"          # 使用上一次运动估计预测下一帧，EKF guess仍作为外部先验
+    Odom/GuessSmoothingDelay: "0.0"   # 内部速度预测不做额外时间平滑，避免四足急转时预测滞后
+    Odom/FillInfoData: "true"         # 在odom_info中输出特征、匹配和内点数，便于定位lost原因
+    Odom/ImageDecimation: "1"         # 视觉里程计使用原始RGB分辨率，不对图像降采样
+    Odom/KeyFrameThr: "0.3"           # 内点比例低于0.3时创建新局部关键帧
+    Odom/VisKeyFrameThr: "150"        # 内点数低于150时创建新局部关键帧
+    Odom/Holonomic: "true"            # 允许估计横向运动，适合可侧移的四足平台
+    Odom/AlignWithGround: "false"     # 不由VO在初始化时重新对齐地面，姿态基准由EKF/IMU提供
+
+    Reg/Strategy: "0"                 # 视觉里程计使用纯视觉配准
+    Reg/Force3DoF: "true"             # 只输出x、y、yaw视觉修正，保留EKF的z、roll、pitch
+
+    Vis/FeatureType: "8"              # VO配准特征：8=GFTT/ORB，增强对步态滚转/俯仰的适应性
+    Vis/CorType: "0"                  # 使用描述子匹配，相比纯光流更能容忍大一些的帧间运动
+    Vis/CorNNType: "1"                # 描述子最近邻使用FLANN KD-Tree
+    Vis/CorNNDR: "0.8"                # 最近邻比率检验阈值，用于剔除模糊匹配
+    Vis/CorGuessWinSize: "40"         # 有EKF guess时在预测投影附近40像素内搜索；若guess异常可临时设0做A/B测试
+    Vis/EstimationType: "1"           # 位姿估计：1=3D→2D PnP
+    Vis/PnPReprojError: "3.0"         # PnP RANSAC内点最大重投影误差，单位为像素
+    Vis/Iterations: "300"             # PnP/RANSAC最大迭代次数
+    Vis/MinInliers: "20"              # VO成功的最少内点数，不用过低阈值接受错误位姿
+    Vis/MinInliersDistribution: "0.0" # 暂不用内点空间分布做额外拒绝，便于先解决走廊中的跟踪丢失
+    Vis/MinDepth: "0.2"               # VO特征有效深度下限，单位m
+    Vis/MaxDepth: "8.0"               # VO特征有效深度上限，抑制D435i远距离深度误差
+    Vis/DepthAsMask: "true"           # 只在有效深度区域提取VO特征
+
+
+    Vis/GridRows: "2"
+    Vis/GridCols: "2"
+
+    Kp/DetectorStrategy: "8"          # 特征策略：8=GFTT/ORB，与后端特征类型一致
+    Kp/MaxFeatures: "1000"            # 每帧最多1000个特征，在走廊低纹理与运动模糊下保留更多候选
+    Kp/GridRows: "2"                  # 特征纵向分区提取，避免集中在窗户或地面高亮处
+    Kp/GridCols: "2"                  # 特征横向分区提取，提高PnP的几何分布稳定性
+
+    OdomF2M/MaxSize: "2000"           # Frame-to-Map局部特征地图最多保留2000个词/特征
+    OdomF2M/BundleAdjustment: "1"     # 局部束调整后端：1=g2o
+    OdomF2M/BundleAdjustmentMaxFrames: "10" # 局部束调整最多优化10个关键帧，限制实时计算量
+    OdomF2M/ValidDepthRatio: "0.75"   # 帧内有效深度特征比例达到0.75时，才将无深度特征加入局部地图

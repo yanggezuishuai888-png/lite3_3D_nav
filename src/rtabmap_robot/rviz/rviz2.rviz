@@ -149,6 +149,8 @@ Visualization Manager:
           Value: false
         base_link:
           Value: true
+        calib_datum:
+          Value: false
         camera_aligned_depth_to_color_frame:
           Value: false
         camera_color_frame:
@@ -190,6 +192,8 @@ Visualization Manager:
                       camera_depth_frame:
                         camera_depth_optical_frame:
                           {}
+                calib_datum:
+                  {}
                 imu_link:
                   {}
       Update Interval: 0
@@ -343,25 +347,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 17.581727981567383
+      Distance: 11.223719596862793
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 2.0603647232055664
-        Y: -4.46869421005249
-        Z: 4.985561370849609
+        X: 24.827058792114258
+        Y: 13.155656814575195
+        Z: -3.0548079013824463
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.2954002618789673
+      Pitch: 1.3697965145111084
       Target Frame: map
       Value: Orbit (rviz_default_plugins)
-      Yaw: 2.9504141807556152
+      Yaw: 0.3392655849456787
     Saved: ~
 Window Geometry:
   Displays:
@@ -379,5 +383,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1854
-  X: 66
+  X: 1986
   Y: 32

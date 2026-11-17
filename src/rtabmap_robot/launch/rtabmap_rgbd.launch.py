@@ -232,6 +232,9 @@ def generate_launch_description():
         ############################
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(ekf_launch_path),
+            launch_arguments={
+                "use_sim_time": LaunchConfiguration("use_sim_time"),
+            }.items(),
         ),
 
         ############################
@@ -244,6 +247,9 @@ def generate_launch_description():
             condition=IfCondition(
                 LaunchConfiguration("use_static_tf")
             ),
+            launch_arguments={
+                "use_sim_time": LaunchConfiguration("use_sim_time"),
+            }.items(),
         ),
 
         ############################
