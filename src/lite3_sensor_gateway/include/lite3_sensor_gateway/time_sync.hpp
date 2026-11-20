@@ -8,6 +8,9 @@ struct ClockStatusData {
   int64_t peer_offset_ns = 0;
   uint64_t peer_bound_ns = 0, peer_rtt_ns = 0, mapping_uncertainty_ns = 0;
   uint64_t probe_age_ns = 0, clock_jumps = 0;
+  uint64_t probes_sent = 0, probes_received = 0, probes_rejected = 0;
+  uint64_t probe_responses_ignored = 0;
+  uint64_t good_samples = 0;
 };
 Bytes encode_clock_status(const ClockStatusData &status);
 ClockStatusData decode_clock_status(const Bytes &bytes);
@@ -33,12 +36,15 @@ class PeerClock {
 
 public:
   bool observe(uint64_t t1, uint64_t t2, uint64_t t3, uint64_t t4,
-               uint64_t receive_steady_ns, uint64_t max_bound_ns = 5000000);
-  bool qualified(uint64_t current_steady_ns) const;
+               uint64_t receive_steady_ns, uint64_t max_bound_ns = 5000000,
+               uint64_t qualification_timeout_ns = 2500000000ULL);
+  bool qualified(uint64_t current_steady_ns,
+                 uint64_t qualification_timeout_ns = 2500000000ULL) const;
   void reset();
   int64_t offset_ns() const { return offset_ns_; }
   uint64_t bound_ns() const { return bound_ns_; }
   uint64_t rtt_ns() const { return rtt_ns_; }
   uint64_t age_ns(uint64_t now) const;
+  unsigned good_samples() const { return good_samples_; }
 };
 } // namespace lite3_gateway

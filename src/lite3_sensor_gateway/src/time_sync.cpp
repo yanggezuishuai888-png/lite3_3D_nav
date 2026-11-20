@@ -13,6 +13,11 @@ Bytes encode_clock_status(const ClockStatusData &s) {
   w.u64(s.mapping_uncertainty_ns);
   w.u64(s.probe_age_ns);
   w.u64(s.clock_jumps);
+  w.u64(s.probes_sent);
+  w.u64(s.probes_received);
+  w.u64(s.probes_rejected);
+  w.u64(s.probe_responses_ignored);
+  w.u64(s.good_samples);
   return w.data;
 }
 ClockStatusData decode_clock_status(const Bytes &bytes) {
@@ -31,6 +36,17 @@ ClockStatusData decode_clock_status(const Bytes &bytes) {
   s.mapping_uncertainty_ns = r.u64();
   s.probe_age_ns = r.u64();
   s.clock_jumps = r.u64();
+  // Accept the original ClockStatus payload during a rolling receiver-first
+  // deployment. A new sender appends probe observability counters.
+  if (r.remaining()) {
+    if (r.remaining() != 5 * sizeof(uint64_t))
+      throw std::runtime_error("invalid extended clock status");
+    s.probes_sent = r.u64();
+    s.probes_received = r.u64();
+    s.probes_rejected = r.u64();
+    s.probe_responses_ignored = r.u64();
+    s.good_samples = r.u64();
+  }
   r.finish();
   return s;
 }
@@ -69,31 +85,42 @@ bool TimeMapper::convert(uint64_t source, uint64_t now, uint64_t &system) const 
 }
 
 bool PeerClock::observe(uint64_t t1, uint64_t t2, uint64_t t3, uint64_t t4,
-                        uint64_t steady, uint64_t max_bound) {
+                        uint64_t steady, uint64_t max_bound,
+                        uint64_t qualification_timeout) {
+  // A previously qualified estimate may ride through a short scheduling or
+  // network outlier. If the last accepted probe is already stale, however,
+  // reacquisition must start from the first of three good samples again.
+  if (last_good_steady_ns_ &&
+      (steady < last_good_steady_ns_ ||
+       steady - last_good_steady_ns_ > qualification_timeout))
+    good_samples_ = 0;
+
   if (t4 < t1 || t3 < t2 || t4 - t1 < t3 - t2 || t4 - t1 > 100000000 ||
-      std::max({t1, t2, t3, t4}) > INT64_MAX) {
-    reset();
+      std::max({t1, t2, t3, t4}) > INT64_MAX)
     return false;
-  }
+
   const auto outbound = static_cast<int64_t>(t2) - static_cast<int64_t>(t1);
   const auto inbound = static_cast<int64_t>(t3) - static_cast<int64_t>(t4);
   const auto rtt = (t4 - t1) - (t3 - t2);
   const auto offset = outbound / 2 + inbound / 2;
   const auto bound = static_cast<uint64_t>(std::llabs(offset)) + (rtt + 1) / 2;
+
+  // Do not let one latency spike erase a valid clock estimate or publish the
+  // rejected bound as if it were usable. qualified() will still fail closed
+  // when no acceptable probe has arrived for the holdover timeout.
+  if (bound > max_bound)
+    return false;
+
   offset_ns_ = offset;
   bound_ns_ = bound;
   rtt_ns_ = rtt;
-  if (bound > max_bound) {
-    reset();
-    return false;
-  }
   last_good_steady_ns_ = steady;
   good_samples_ = std::min(good_samples_ + 1, 3U);
   return true;
 }
-bool PeerClock::qualified(uint64_t now) const {
+bool PeerClock::qualified(uint64_t now, uint64_t qualification_timeout) const {
   return good_samples_ >= 3 && last_good_steady_ns_ && now >= last_good_steady_ns_ &&
-         now - last_good_steady_ns_ <= 2500000000ULL;
+         now - last_good_steady_ns_ <= qualification_timeout;
 }
 void PeerClock::reset() { good_samples_ = 0; }
 uint64_t PeerClock::age_ns(uint64_t now) const {

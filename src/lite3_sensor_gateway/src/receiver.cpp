@@ -5,6 +5,7 @@
 #include <cmath>
 #include <deque>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include <limits>
 #include <rclcpp/rclcpp.hpp>
 #include <set>
 #include <std_msgs/msg/bool.hpp>
@@ -38,6 +39,7 @@ class Receiver : public rclcpp::Node {
   ClockStatusData clock_status_;
   TimeMapper local_clock_;
   double stale_;
+  uint64_t clock_holdover_ns_ = 5000000000ULL;
   std::string prefix_;
   sensor_msgs::msg::CameraInfo info_, color_info_, aligned_info_;
   bool have_info_ = false, have_color_info_ = false, have_aligned_info_ = false;
@@ -65,7 +67,7 @@ class Receiver : public rclcpp::Node {
            have_clock_status_ && clock_status_.qualified &&
            clock_status_.peer_bound_ns <= 5000000 &&
            clock_status_.mapping_uncertainty_ns <= 2000000 &&
-           clock_status_.probe_age_ns <= 2500000000ULL &&
+           clock_status_.probe_age_ns <= clock_holdover_ns_ &&
            t - clock_status_received_ <= 1.5 &&
            streams_.count(Type::Heartbeat) &&
            t - streams_.at(Type::Heartbeat).received < stale_;
@@ -373,9 +375,38 @@ class Receiver : public rclcpp::Node {
     diagnostic_msgs::msg::DiagnosticStatus link;
     link.name = prefix_ + "/gateway";
     link.hardware_id = "lite3_udp";
-    bool online =
-        streams_.count(Type::Heartbeat) && t - streams_.at(Type::Heartbeat).received < stale_;
-    const bool valid_time = online && local_clock_.fresh(after) && time_ready();
+    const bool have_heartbeat = streams_.count(Type::Heartbeat);
+    const double heartbeat_age =
+        have_heartbeat ? t - streams_.at(Type::Heartbeat).received
+                       : std::numeric_limits<double>::infinity();
+    const double clock_status_age =
+        have_clock_status_ ? t - clock_status_received_
+                           : std::numeric_limits<double>::infinity();
+    const bool online = have_heartbeat && heartbeat_age < stale_;
+    const bool local_clock_fresh = local_clock_.fresh(after);
+    const bool clock_status_fresh = have_clock_status_ && clock_status_age <= 1.5;
+    const bool probe_fresh =
+        have_clock_status_ && clock_status_.probe_age_ns <= clock_holdover_ns_;
+    const bool valid_time = online && local_clock_fresh && time_ready();
+    std::string gate_reason = "ok";
+    if (clock_step_latched_)
+      gate_reason = "pc_clock_step_latched";
+    else if (!local_clock_fresh)
+      gate_reason = "pc_clock_mapping_stale";
+    else if (!have_clock_status_)
+      gate_reason = "no_sender_clock_status";
+    else if (!clock_status_.qualified)
+      gate_reason = "sender_clock_unqualified";
+    else if (clock_status_.peer_bound_ns > 5000000)
+      gate_reason = "sender_peer_bound_exceeded";
+    else if (clock_status_.mapping_uncertainty_ns > 2000000)
+      gate_reason = "sender_mapping_uncertainty_exceeded";
+    else if (!probe_fresh)
+      gate_reason = "sender_probe_holdover_expired";
+    else if (!clock_status_fresh)
+      gate_reason = "sender_clock_status_stale";
+    else if (!online)
+      gate_reason = "sender_heartbeat_stale";
     std_msgs::msg::Bool valid;
     valid.data = valid_time;
     time_valid_->publish(valid);
@@ -383,13 +414,30 @@ class Receiver : public rclcpp::Node {
     link.message = valid_time ? "Clock qualified; dynamic TF pending" :
                    online ? "Clock unqualified; fusion topics withheld" : "No recent sender heartbeat";
     value(link, "time_valid", valid_time ? "true" : "false");
+    value(link, "time_gate_reason", gate_reason);
     value(link, "clock_step_latched", clock_step_latched_ ? "true" : "false");
+    value(link, "sender_clock_qualified", clock_status_.qualified ? "true" : "false");
+    value(link, "clock_holdover_ns", std::to_string(clock_holdover_ns_));
+    value(link, "clock_status_age_ns",
+          std::isfinite(clock_status_age)
+              ? std::to_string(static_cast<uint64_t>(clock_status_age * 1e9))
+              : std::to_string(UINT64_MAX));
+    value(link, "heartbeat_age_ns",
+          std::isfinite(heartbeat_age)
+              ? std::to_string(static_cast<uint64_t>(heartbeat_age * 1e9))
+              : std::to_string(UINT64_MAX));
     value(link, "peer_offset_ns", std::to_string(clock_status_.peer_offset_ns));
     value(link, "peer_bound_ns", std::to_string(clock_status_.peer_bound_ns));
     value(link, "peer_rtt_ns", std::to_string(clock_status_.peer_rtt_ns));
     value(link, "mapping_uncertainty_ns", std::to_string(clock_status_.mapping_uncertainty_ns));
     value(link, "probe_age_ns", std::to_string(clock_status_.probe_age_ns));
     value(link, "sender_clock_jumps", std::to_string(clock_status_.clock_jumps));
+    value(link, "sender_probes_sent", std::to_string(clock_status_.probes_sent));
+    value(link, "sender_probes_received", std::to_string(clock_status_.probes_received));
+    value(link, "sender_probes_rejected", std::to_string(clock_status_.probes_rejected));
+    value(link, "sender_probe_responses_ignored",
+          std::to_string(clock_status_.probe_responses_ignored));
+    value(link, "sender_good_samples", std::to_string(clock_status_.good_samples));
     value(link, "probe_replies", std::to_string(probe_replies_));
     value(link, "timestamp_policy",
           source_time_ ? "source (requires synchronized source clock)"
@@ -441,9 +489,12 @@ public:
     int tp = declare_parameter<int>("telemetry_port", 45001),
         ip = declare_parameter<int>("image_port", 45003);
     stale_ = declare_parameter<double>("stale_timeout", 2.5);
+    const double clock_holdover = declare_parameter<double>("clock_holdover_seconds", 5.0);
     if (tp < 1024 || ip < 1024 || tp > 65535 || ip > 65535 || tp == ip || !std::isfinite(stale_) ||
-        stale_ < 1.1)
+        stale_ < 1.1 || !std::isfinite(clock_holdover) ||
+        clock_holdover < 2.5 || clock_holdover > 30.0)
       throw std::runtime_error("invalid port/stale_timeout");
+    clock_holdover_ns_ = static_cast<uint64_t>(clock_holdover * 1e9);
     prefix_ = declare_parameter<std::string>("output_prefix", "/lite3");
     if (prefix_.empty() || prefix_[0] != '/' || prefix_.back() == '/')
       throw std::runtime_error("output_prefix must be absolute with no trailing slash");

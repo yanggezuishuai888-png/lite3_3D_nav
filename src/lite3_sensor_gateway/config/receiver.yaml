@@ -12,3 +12,4 @@ lite3_gateway_receiver:
     image_qos_depth: 10  # PC 图像发布历史队列深度
     image_qos_reliable: false  # PC 本机图像可靠传输（默认使用传感器 Best Effort）
     stale_timeout: 2.5
+    clock_holdover_seconds: 5.0  # 必须与Sender一致；仅放宽探测保持，不放宽状态包/心跳超时

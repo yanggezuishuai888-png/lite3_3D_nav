@@ -1,0 +1,70 @@
+%YAML:1.0
+
+File.version: "1.0"
+
+Camera.type: "PinHole"
+
+Camera1.fx: 604.0978393554688
+Camera1.fy: 603.3976440429688
+Camera1.cx: 323.78936767578125
+Camera1.cy: 252.87355041503906
+
+# 输入是RealSense已校正且对齐到color光学坐标系的RGB-D。
+Camera1.k1: 0.0
+Camera1.k2: 0.0
+Camera1.p1: 0.0
+Camera1.p2: 0.0
+Camera1.k3: 0.0
+
+Camera.width: 640
+Camera.height: 480
+Camera.newWidth: 640
+Camera.newHeight: 480
+Camera.fps: 15
+
+# 导出脚本把rgb8转换成OpenCV读取的BGR顺序。
+Camera.RGB: 0
+
+Stereo.b: 0.050
+Stereo.ThDepth: 40.0
+RGBD.DepthMapFactor: 1000.0
+
+# T_b_c1：从color optical相机坐标系到IMU/body坐标系(base_link)的变换。
+# IMU消息已由厂家转换到base_link，因此这里不能再使用IMU传感器裸坐标系。
+IMU.T_b_c1: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: f
+   data: [ 0.003156111, -0.103807753,  0.994592373,  0.113068639,
+          -0.999955105,  0.008558775,  0.004066426,  0.031692578,
+          -0.008934619, -0.994560555, -0.103776081,  0.128031452,
+           0.0,          0.0,          0.0,          1.0]
+
+# 第一版噪声参数来自Lite3静止数据审查，后续应通过更长静止数据/Allan方差复核。
+# NoiseGyro: rad/s/sqrt(Hz)，NoiseAcc: m/s^2/sqrt(Hz)。
+# GyroWalk: rad/s^2/sqrt(Hz)，AccWalk: m/s^3/sqrt(Hz)。
+IMU.NoiseGyro: 5.0e-4
+IMU.NoiseAcc: 5.0e-3
+IMU.GyroWalk: 2.0e-5
+IMU.AccWalk: 1.0e-3
+IMU.Frequency: 200.0
+
+# 刚失跟时不要强行插入关键帧，降低错误子地图扩张风险。
+IMU.InsertKFsWhenLost: 0
+
+ORBextractor.nFeatures: 2000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1.0
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2.0
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3.0
+Viewer.ViewpointX: 0.0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500.0

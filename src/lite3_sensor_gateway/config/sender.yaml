@@ -14,6 +14,7 @@ lite3_gateway_sender:
     depth_max_hz: 15.0
     color_max_hz: 15.0
     depth_scale_m: 0.001
+    clock_holdover_seconds: 5.0  # 短时探测调度抖动期间沿用最后合格估计；真实时钟跳变仍立即锁死
     motion_clock_domain: 1  # 0=unknown, 1=steady, 2=system; source driver uses steady
     camera_clock_domain: 2  # 相机驱动输出系统时间
     imu_topic: /imu/data

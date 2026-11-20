@@ -13,3 +13,4 @@ lite3_gateway_receiver:
     rgbd_image_qos_depth: 1  # RGB 和对齐深度：Keep Last(1)
     image_qos_reliable: false  # 图像使用 Best Effort
     stale_timeout: 2.5
+    clock_holdover_seconds: 5.0  # 必须与Sender一致；ClockStatus和心跳超时保持原安全门限

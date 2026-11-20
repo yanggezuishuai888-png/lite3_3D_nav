@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <functional>
 #include <mutex>
+#include <poll.h>
 #include <random>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -161,7 +162,6 @@ class Sender : public rclcpp::Node {
   // Channels are declared last so workers join before the rest of the node is destroyed.
   std::vector<rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
   rclcpp::TimerBase::SharedPtr timer_;
-  rclcpp::TimerBase::SharedPtr probe_timer_;
   uint64_t session_;
   double depth_scale_, depth_rate_, color_rate_;
   RateLimiter depth_limiter_, aligned_limiter_, color_limiter_;
@@ -169,11 +169,16 @@ class Sender : public rclcpp::Node {
   rclcpp::Clock motion_stamp_clock_{RCL_STEADY_TIME};
   TimeMapper mapper_;
   PeerClock peer_clock_;
+  std::mutex peer_clock_mutex_;
   std::unique_ptr<Socket> probe_;
   sockaddr_in probe_peer_{};
   uint64_t probe_sequence_ = 0, pending_probe_ = 0, pending_t1_ = 0;
-  uint64_t probes_sent_ = 0, probes_received_ = 0, probes_rejected_ = 0;
-  double last_probe_ = 0, last_report_ = 0;
+  std::atomic<uint64_t> probes_sent_{0}, probes_received_{0}, probes_rejected_{0};
+  std::atomic<uint64_t> probe_responses_ignored_{0};
+  std::atomic<bool> probe_running_{false};
+  std::thread probe_thread_;
+  uint64_t clock_holdover_ns_ = 5000000000ULL;
+  double last_report_ = 0;
   bool clock_step_latched_ = false;
   sensor_msgs::msg::CameraInfo::ConstSharedPtr calibration_, color_calibration_, aligned_calibration_;
   std::map<std::string, geometry_msgs::msg::TransformStamped> camera_transforms_;
@@ -197,9 +202,14 @@ class Sender : public rclcpp::Node {
   bool time_ready() {
     auto t = std::chrono::steady_clock::now().time_since_epoch();
     auto peer_steady = std::chrono::duration_cast<std::chrono::nanoseconds>(t).count();
+    bool peer_qualified;
+    {
+      std::lock_guard<std::mutex> lock(peer_clock_mutex_);
+      peer_qualified = peer_clock_.qualified(peer_steady, clock_holdover_ns_);
+    }
     return !clock_step_latched_ &&
            mapper_.fresh(motion_stamp_clock_.now().nanoseconds()) &&
-           peer_clock_.qualified(peer_steady);
+           peer_qualified;
   }
   bool camera_stamp_valid(uint64_t stamp) const {
     const auto wall = system_ns();
@@ -226,15 +236,25 @@ class Sender : public rclcpp::Node {
         if (f.env.type != Type::TimeResponse || checksum(f.data) != f.crc ||
             f.env.session != session_ ||
             f.env.sequence != pending_probe_ || f.count != 1 ||
-            f.total != f.data.size())
+            f.total != f.data.size()) {
+          ++probe_responses_ignored_;
           continue;
+        }
         Reader r(f.data);
         auto t1 = r.u64(), t2 = r.u64(), t3 = r.u64();
         r.finish();
-        if (t1 != pending_t1_ || t1 != f.env.source_ns)
+        if (t1 != pending_t1_ || t1 != f.env.source_ns) {
+          ++probe_responses_ignored_;
           continue;
+        }
         pending_probe_ = 0;
-        if (peer_clock_.observe(t1, t2, t3, t4, steady))
+        bool accepted;
+        {
+          std::lock_guard<std::mutex> lock(peer_clock_mutex_);
+          accepted = peer_clock_.observe(t1, t2, t3, t4, steady, 5000000,
+                                         clock_holdover_ns_);
+        }
+        if (accepted)
           ++probes_received_;
         else {
           ++probes_rejected_;
@@ -245,6 +265,7 @@ class Sender : public rclcpp::Node {
                                static_cast<long long>((static_cast<int64_t>(t4) - static_cast<int64_t>(t3)) / 1000));
         }
       } catch (const std::exception &) {
+        ++probe_responses_ignored_;
       }
     }
   }
@@ -262,20 +283,39 @@ class Sender : public rclcpp::Node {
     if (probe_->send(fragment(e, w.data).front(), probe_peer_))
       ++probes_sent_;
   }
+  void probe_loop() {
+    auto next_probe = std::chrono::steady_clock::now();
+    while (probe_running_.load(std::memory_order_acquire)) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= next_probe) {
+        send_probe();
+        do {
+          next_probe += std::chrono::milliseconds(500);
+        } while (next_probe <= now);
+      }
+
+      const auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(
+          next_probe - std::chrono::steady_clock::now());
+      pollfd descriptor{probe_->fd(), POLLIN, 0};
+      const int timeout_ms = std::clamp<int>(static_cast<int>(wait.count()), 0, 100);
+      const int result = poll(&descriptor, 1, timeout_ms);
+      if (result > 0 && (descriptor.revents & POLLIN))
+        poll_probe();
+      else if (result < 0 && errno != EINTR)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
   void clock_tick() {
     const auto before = motion_stamp_clock_.now().nanoseconds();
     const auto wall = system_ns();
     const auto after = motion_stamp_clock_.now().nanoseconds();
     if (mapper_.update(before, wall, after)) {
       clock_step_latched_ = true;
+      std::lock_guard<std::mutex> lock(peer_clock_mutex_);
       peer_clock_.reset();
       RCLCPP_ERROR(get_logger(), "System clock stepped; restart camera and gateway after time sync");
     }
     auto t = steady_seconds();
-    if (t - last_probe_ >= 0.5) {
-      send_probe();
-      last_probe_ = t;
-    }
     if (t - last_report_ >= 1.0) {
       queue(Type::Heartbeat, 0, ClockDomain::Unknown, [] {
         Writer w;
@@ -283,15 +323,25 @@ class Sender : public rclcpp::Node {
         return w.data;
       });
       ClockStatusData status;
-      status.qualified = time_ready();
-      status.peer_offset_ns = peer_clock_.offset_ns();
-      status.peer_bound_ns = peer_clock_.bound_ns();
-      status.peer_rtt_ns = peer_clock_.rtt_ns();
       status.mapping_uncertainty_ns = mapper_.uncertainty_ns();
       const auto peer_steady = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                    std::chrono::steady_clock::now().time_since_epoch()).count();
-      status.probe_age_ns = peer_clock_.age_ns(peer_steady);
+      {
+        std::lock_guard<std::mutex> lock(peer_clock_mutex_);
+        status.qualified = !clock_step_latched_ &&
+                           mapper_.fresh(motion_stamp_clock_.now().nanoseconds()) &&
+                           peer_clock_.qualified(peer_steady, clock_holdover_ns_);
+        status.peer_offset_ns = peer_clock_.offset_ns();
+        status.peer_bound_ns = peer_clock_.bound_ns();
+        status.peer_rtt_ns = peer_clock_.rtt_ns();
+        status.probe_age_ns = peer_clock_.age_ns(peer_steady);
+        status.good_samples = peer_clock_.good_samples();
+      }
       status.clock_jumps = mapper_.jumps();
+      status.probes_sent = probes_sent_.load();
+      status.probes_received = probes_received_.load();
+      status.probes_rejected = probes_rejected_.load();
+      status.probe_responses_ignored = probe_responses_ignored_.load();
       queue(Type::ClockStatus, wall, ClockDomain::System,
             [status] { return encode_clock_status(status); });
       if (camera_transforms_.size() == kCameraInternalTfCount) {
@@ -321,7 +371,8 @@ class Sender : public rclcpp::Node {
       RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 10000,
           "time_valid=%d offset_ms=%.3f bound_ms=%.3f probes=%lu/%lu rejected=%lu jumps=%lu UDP telemetry=%lu images=%lu overwritten=%lu errors=%lu",
           status.qualified, status.peer_offset_ns / 1e6, status.peer_bound_ns / 1e6,
-          probes_received_, probes_sent_, probes_rejected_, status.clock_jumps,
+          status.probes_received, status.probes_sent, status.probes_rejected,
+          status.clock_jumps,
           telemetry_->sent.load(), images_->sent.load(),
           telemetry_->overwritten.load() + images_->overwritten.load(),
           telemetry_->errors.load() + images_->errors.load());
@@ -355,11 +406,14 @@ public:
     depth_rate_ = declare_parameter<double>("depth_max_hz", 15.0);
     color_rate_ = declare_parameter<double>("color_max_hz", 15.0);
     depth_scale_ = declare_parameter<double>("depth_scale_m", 0.001);
+    const double clock_holdover = declare_parameter<double>("clock_holdover_seconds", 5.0);
     if (tp < 1024 || ip < 1024 || tp > 65535 || ip > 65535 || tp == ip || !std::isfinite(mbps) ||
         mbps <= 0 || !std::isfinite(depth_rate_) || depth_rate_ <= 0 ||
         !std::isfinite(color_rate_) || color_rate_ <= 0 ||
-        !std::isfinite(depth_scale_) || depth_scale_ <= 0)
+        !std::isfinite(depth_scale_) || depth_scale_ <= 0 ||
+        !std::isfinite(clock_holdover) || clock_holdover < 2.5 || clock_holdover > 30.0)
       throw std::runtime_error("invalid gateway port/rate/scale");
+    clock_holdover_ns_ = static_cast<uint64_t>(clock_holdover * 1e9);
     motion_clock_ = clock_parameter("motion_clock_domain", 1);
     camera_clock_ = clock_parameter("camera_clock_domain", 2);
     if (motion_clock_ != ClockDomain::Steady || camera_clock_ != ClockDomain::System)
@@ -456,9 +510,15 @@ public:
           [this](sensor_msgs::msg::CameraInfo::ConstSharedPtr m) { aligned_calibration_ = m; });
     }
     timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { clock_tick(); });
-    probe_timer_ = create_wall_timer(std::chrono::milliseconds(2), [this] { poll_probe(); });
+    probe_running_.store(true, std::memory_order_release);
+    probe_thread_ = std::thread([this] { probe_loop(); });
     RCLCPP_INFO(get_logger(), "Read-only gateway: %s -> %s UDP %d/%d; no control output",
                 bind.c_str(), peer.c_str(), tp, ip);
+  }
+  ~Sender() override {
+    probe_running_.store(false, std::memory_order_release);
+    if (probe_thread_.joinable())
+      probe_thread_.join();
   }
 };
 } // namespace
