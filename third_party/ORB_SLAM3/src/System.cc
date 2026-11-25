@@ -671,7 +671,7 @@ void System::SaveTrajectoryEuRoC(const string &filename)
 
     vector<Map*> vpMaps = mpAtlas->GetAllMaps();
     int numMaxKFs = 0;
-    Map* pBiggerMap;
+    Map* pBiggerMap = nullptr;
     std::cout << "There are " << std::to_string(vpMaps.size()) << " maps in the atlas" << std::endl;
     for(Map* pMap :vpMaps)
     {
@@ -681,6 +681,12 @@ void System::SaveTrajectoryEuRoC(const string &filename)
             numMaxKFs = pMap->GetAllKeyFrames().size();
             pBiggerMap = pMap;
         }
+    }
+
+    if(!pBiggerMap || numMaxKFs == 0)
+    {
+        cout << "No keyframes are available; skipping trajectory export." << endl;
+        return;
     }
 
     vector<KeyFrame*> vpKFs = pBiggerMap->GetAllKeyFrames();
@@ -1059,7 +1065,7 @@ void System::SaveKeyFrameTrajectoryEuRoC(const string &filename)
     cout << endl << "Saving keyframe trajectory to " << filename << " ..." << endl;
 
     vector<Map*> vpMaps = mpAtlas->GetAllMaps();
-    Map* pBiggerMap;
+    Map* pBiggerMap = nullptr;
     int numMaxKFs = 0;
     for(Map* pMap :vpMaps)
     {
@@ -1334,6 +1340,92 @@ vector<cv::KeyPoint> System::GetTrackedKeyPointsUn()
 {
     unique_lock<mutex> lock(mMutexState);
     return mTrackedKeyPointsUn;
+}
+
+System::DiagnosticSnapshot System::GetDiagnosticSnapshot()
+{
+    DiagnosticSnapshot snapshot;
+    {
+        unique_lock<mutex> lock(mMutexState);
+        snapshot.tracking_state = mTrackingState;
+        snapshot.tracked_keypoints = mTrackedKeyPointsUn.size();
+        snapshot.tracked_map_points = count_if(
+            mTrackedMapPoints.begin(), mTrackedMapPoints.end(),
+            [](MapPoint* point) { return point != nullptr; });
+    }
+
+    snapshot.matches_inliers = mpTracker->GetMatchesInliers();
+
+    const Frame &frame = mpTracker->mCurrentFrame;
+    snapshot.body_pose_valid = frame.HasPose();
+    if(snapshot.body_pose_valid)
+    {
+        const Sophus::SE3f body_pose = mpTracker->mCurrentFrame.GetImuPose();
+        const Eigen::Vector3f position = body_pose.translation();
+        const Eigen::Quaternionf quaternion = body_pose.unit_quaternion();
+        snapshot.body_position_x = position.x();
+        snapshot.body_position_y = position.y();
+        snapshot.body_position_z = position.z();
+        snapshot.body_quaternion_x = quaternion.x();
+        snapshot.body_quaternion_y = quaternion.y();
+        snapshot.body_quaternion_z = quaternion.z();
+        snapshot.body_quaternion_w = quaternion.w();
+    }
+
+    snapshot.body_velocity_valid = frame.HasVelocity();
+    if(snapshot.body_velocity_valid)
+    {
+        const Eigen::Vector3f velocity = frame.GetVelocity();
+        snapshot.velocity_x = velocity.x();
+        snapshot.velocity_y = velocity.y();
+        snapshot.velocity_z = velocity.z();
+    }
+
+    const IMU::Bias &bias = frame.mImuBias;
+    snapshot.gyro_bias_x = bias.bwx;
+    snapshot.gyro_bias_y = bias.bwy;
+    snapshot.gyro_bias_z = bias.bwz;
+    snapshot.accel_bias_x = bias.bax;
+    snapshot.accel_bias_y = bias.bay;
+    snapshot.accel_bias_z = bias.baz;
+
+    if(frame.mpImuPreintegratedFrame)
+    {
+        const Eigen::Vector3f delta_velocity =
+            frame.mpImuPreintegratedFrame->GetUpdatedDeltaVelocity();
+        const Eigen::Vector3f delta_position =
+            frame.mpImuPreintegratedFrame->GetUpdatedDeltaPosition();
+        snapshot.preintegration_valid = true;
+        snapshot.preintegration_dt = frame.mpImuPreintegratedFrame->dT;
+        snapshot.delta_velocity_x = delta_velocity.x();
+        snapshot.delta_velocity_y = delta_velocity.y();
+        snapshot.delta_velocity_z = delta_velocity.z();
+        snapshot.delta_position_x = delta_position.x();
+        snapshot.delta_position_y = delta_position.y();
+        snapshot.delta_position_z = delta_position.z();
+    }
+
+    snapshot.inertial_scale = mpLocalMapper->mScale;
+    const Eigen::Vector3d gravity =
+        mpLocalMapper->mRwg * Eigen::Vector3d(0.0, 0.0, -IMU::GRAVITY_VALUE);
+    snapshot.gravity_x = gravity.x();
+    snapshot.gravity_y = gravity.y();
+    snapshot.gravity_z = gravity.z();
+
+    vector<Map*> maps = mpAtlas->GetAllMaps();
+    snapshot.map_count = static_cast<int>(maps.size());
+
+    Map* current_map = mpAtlas->GetCurrentMap();
+    if(current_map)
+    {
+        snapshot.map_id = static_cast<long long>(current_map->GetId());
+        snapshot.keyframes_in_map = current_map->KeyFramesInMap();
+        snapshot.map_points_in_map = current_map->MapPointsInMap();
+        snapshot.imu_initialized = current_map->isImuInitialized();
+        snapshot.inertial_ba1_done = current_map->GetIniertialBA1();
+        snapshot.inertial_ba2_done = current_map->GetIniertialBA2();
+    }
+    return snapshot;
 }
 
 double System::GetTimeFromIMUInit()

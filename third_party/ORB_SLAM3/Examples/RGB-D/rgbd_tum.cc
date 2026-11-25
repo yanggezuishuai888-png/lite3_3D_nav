@@ -155,26 +155,37 @@ int main(int argc, char **argv)
 void LoadImages(const string &strAssociationFilename, vector<string> &vstrImageFilenamesRGB,
                 vector<string> &vstrImageFilenamesD, vector<double> &vTimestamps)
 {
-    ifstream fAssociation;
-    fAssociation.open(strAssociationFilename.c_str());
-    while(!fAssociation.eof())
+    ifstream fAssociation(strAssociationFilename.c_str());
+    if(!fAssociation.is_open())
     {
-        string s;
-        getline(fAssociation,s);
-        if(!s.empty())
-        {
-            stringstream ss;
-            ss << s;
-            double t;
-            string sRGB, sD;
-            ss >> t;
-            vTimestamps.push_back(t);
-            ss >> sRGB;
-            vstrImageFilenamesRGB.push_back(sRGB);
-            ss >> t;
-            ss >> sD;
-            vstrImageFilenamesD.push_back(sD);
+        cerr << "Failed to open association file: " << strAssociationFilename << endl;
+        return;
+    }
 
+    string s;
+    size_t lineNumber = 0;
+    while(getline(fAssociation, s))
+    {
+        ++lineNumber;
+
+        const size_t first = s.find_first_not_of(" \t\r\n");
+        if(first == string::npos || s[first] == '#')
+            continue;
+
+        stringstream ss(s);
+        double tRGB = 0.0;
+        double tDepth = 0.0;
+        string sRGB;
+        string sD;
+        if(!(ss >> tRGB >> sRGB >> tDepth >> sD))
+        {
+            cerr << "Skipping malformed association line " << lineNumber
+                 << ": " << s << endl;
+            continue;
         }
+
+        vTimestamps.push_back(tRGB);
+        vstrImageFilenamesRGB.push_back(sRGB);
+        vstrImageFilenamesD.push_back(sD);
     }
 }

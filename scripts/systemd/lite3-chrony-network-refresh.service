@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh Chrony immediately when Internet connectivity appears
+After=NetworkManager.service chrony.service
+Requires=chrony.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/lite3-chrony-network-refresh
+TimeoutStartSec=40

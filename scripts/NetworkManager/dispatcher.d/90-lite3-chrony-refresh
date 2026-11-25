@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+action="${2:-}"
+case "${action}" in
+  up|dhcp4-change|dhcp6-change|connectivity-change)
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+
+# Run outside the dispatcher process: NTP qualification can take a few seconds
+# and must not block NetworkManager's dispatcher queue.
+/usr/bin/systemctl start --no-block lite3-chrony-network-refresh.service

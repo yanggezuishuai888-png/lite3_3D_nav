@@ -26,6 +26,7 @@
 #include<stdlib.h>
 #include<string>
 #include<thread>
+#include<limits>
 #include<opencv2/core/core.hpp>
 
 #include "Tracking.h"
@@ -83,6 +84,65 @@ class Settings;
 class System
 {
 public:
+    struct DiagnosticSnapshot
+    {
+        static constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+
+        int tracking_state = -1;
+        long long map_id = -1;
+        int map_count = 0;
+        unsigned long keyframes_in_map = 0;
+        unsigned long map_points_in_map = 0;
+        bool imu_initialized = false;
+        bool inertial_ba1_done = false;
+        bool inertial_ba2_done = false;
+        int matches_inliers = 0;
+        size_t tracked_keypoints = 0;
+        size_t tracked_map_points = 0;
+
+        // Current IMU/body state estimated by ORB-SLAM3.  These values are
+        // intentionally exposed only as a read-only snapshot for offline
+        // diagnosis of metric and vertical drift.
+        bool body_pose_valid = false;
+        bool body_velocity_valid = false;
+        double body_position_x = kNaN;
+        double body_position_y = kNaN;
+        double body_position_z = kNaN;
+        double body_quaternion_x = kNaN;
+        double body_quaternion_y = kNaN;
+        double body_quaternion_z = kNaN;
+        double body_quaternion_w = kNaN;
+        double velocity_x = kNaN;
+        double velocity_y = kNaN;
+        double velocity_z = kNaN;
+        double gyro_bias_x = kNaN;
+        double gyro_bias_y = kNaN;
+        double gyro_bias_z = kNaN;
+        double accel_bias_x = kNaN;
+        double accel_bias_y = kNaN;
+        double accel_bias_z = kNaN;
+
+        // Bias-corrected IMU preintegration between the previous and current
+        // frame, expressed in the previous body frame.  Gravity and initial
+        // velocity are not included in these delta quantities.
+        bool preintegration_valid = false;
+        double preintegration_dt = kNaN;
+        double delta_velocity_x = kNaN;
+        double delta_velocity_y = kNaN;
+        double delta_velocity_z = kNaN;
+        double delta_position_x = kNaN;
+        double delta_position_y = kNaN;
+        double delta_position_z = kNaN;
+
+        // State of the inertial initializer. Scale is fixed to one for RGB-D,
+        // while the gravity vector is useful for detecting initialization
+        // changes and tilt errors.
+        double inertial_scale = kNaN;
+        double gravity_x = kNaN;
+        double gravity_y = kNaN;
+        double gravity_z = kNaN;
+    };
+
     // Input sensor
     enum eSensor{
         MONOCULAR=0,
@@ -176,6 +236,7 @@ public:
     int GetTrackingState();
     std::vector<MapPoint*> GetTrackedMapPoints();
     std::vector<cv::KeyPoint> GetTrackedKeyPointsUn();
+    DiagnosticSnapshot GetDiagnosticSnapshot();
 
     // For debugging
     double GetTimeFromIMUInit();

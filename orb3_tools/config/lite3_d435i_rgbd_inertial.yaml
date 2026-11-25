@@ -1,70 +1,75 @@
 %YAML:1.0
 
-File.version: "1.0"
+File.version: "1.0"                  # 配置文件版本标记；通常不直接影响SLAM位姿计算
 
-Camera.type: "PinHole"
+# ===================== 1. 相机模型与内参 =====================
 
-Camera1.fx: 604.0978393554688
-Camera1.fy: 603.3976440429688
-Camera1.cx: 323.78936767578125
-Camera1.cy: 252.87355041503906
+Camera.type: "PinHole"                # 针孔相机模型；适用于已按对应内参处理的普通透视图像
 
-# 输入是RealSense已校正且对齐到color光学坐标系的RGB-D。
-Camera1.k1: 0.0
-Camera1.k2: 0.0
-Camera1.p1: 0.0
-Camera1.p2: 0.0
-Camera1.k3: 0.0
+Camera1.fx: 604.0978393554688        # 水平方向焦距，单位为像素；决定水平像素偏移对应的空间方向
+Camera1.fy: 603.3976440429688        # 垂直方向焦距，单位为像素；决定垂直像素偏移对应的空间方向
+Camera1.cx: 323.78936767578125      # 主点横坐标，单位为像素；相机光轴在图像中的水平位置
+Camera1.cy: 252.87355041503906      # 主sk-57160fe5588c1c6caedf124b80eca8556b46e4d5930636a0f88c777cc9a13be3点纵坐标，单位为像素；相机光轴在图像中的垂直位置
 
-Camera.width: 640
-Camera.height: 480
-Camera.newWidth: 640
-Camera.newHeight: 480
-Camera.fps: 15
+# 下列零畸变系数的前提：输入RGB图像已经校正，且使用与其对应的内参
+Camera1.k1: 0.0                       # 第一径向畸变系数；0表示不再进行该项畸变补偿
+Camera1.k2: 0.0                       # 第二径向畸变系数；0表示不进行该项补偿
+Camera1.p1: 0.0                       # 第一切向畸变系数；0表示不进行该项补偿
+Camera1.p2: 0.0                       # 第二切向畸变系数；0表示不进行该项补偿
+Camera1.k3: 0.0                       # 第三径向畸变系数；0表示不进行该项补偿
 
-# 导出脚本把rgb8转换成OpenCV读取的BGR顺序。
-Camera.RGB: 0
+Camera.width: 640                     # 输入图像原始宽度，单位为像素
+Camera.height: 480                    # 输入图像原始高度，单位为像素
+Camera.newWidth: 640                  # ORB-SLAM3处理图像的目标宽度；当前与原始宽度相同
+Camera.newHeight: 480                 # ORB-SLAM3处理图像的目标高度；当前与原始高度相同
+Camera.fps: 15                        # 配置的相机帧率；影响部分关键帧时间相关逻辑，不会改变真实采样率
 
-Stereo.b: 0.050
-Stereo.ThDepth: 40.0
-RGBD.DepthMapFactor: 1000.0
+Camera.RGB: 0                         # 0表示输入三通道顺序是BGR；1表示RGB；主要决定灰度转换方式
 
-# T_b_c1：从color optical相机坐标系到IMU/body坐标系(base_link)的变换。
-# IMU消息已由厂家转换到base_link，因此这里不能再使用IMU传感器裸坐标系。
+# ===================== 2. RGB-D深度参数 =====================
+
+Stereo.b: 0.050                       # RGB-D模式的基线参数，单位米；当前为0.05m，参与bf及近远点阈值计算
+Stereo.ThDepth: 40.0                  # 近点/远点分类的无量纲阈值系数；有效距离阈值约为b×ThDepth（小于这个值是为近点，大于这个值是为远点）
+RGBD.DepthMapFactor: 1000.0          # 深度图数值到米的换算因子；深度整数值除以1000得到米
+
+# ===================== 3. 相机与IMU外参 =====================
+# T_b_c1：相机光学坐标系 -> IMU使用的base_link坐标系
+# 左上3×3为旋转矩阵，最右列前三个数为平移，单位米
 IMU.T_b_c1: !!opencv-matrix
    rows: 4
    cols: 4
    dt: f
-   data: [ 0.003156111, -0.103807753,  0.994592373,  0.113068639,
+   data: [ 0.003156111, -0.103807753,  0.994592373,  0.118068639,
           -0.999955105,  0.008558775,  0.004066426,  0.031692578,
           -0.008934619, -0.994560555, -0.103776081,  0.128031452,
-           0.0,          0.0,          0.0,          1.0]
+           0.0,          0.0,          0.0,          1.0 ]
+# ===================== 4. IMU噪声与采样率 =====================
 
-# 第一版噪声参数来自Lite3静止数据审查，后续应通过更长静止数据/Allan方差复核。
-# NoiseGyro: rad/s/sqrt(Hz)，NoiseAcc: m/s^2/sqrt(Hz)。
-# GyroWalk: rad/s^2/sqrt(Hz)，AccWalk: m/s^3/sqrt(Hz)。
-IMU.NoiseGyro: 5.0e-4
-IMU.NoiseAcc: 5.0e-3
-IMU.GyroWalk: 2.0e-5
-IMU.AccWalk: 1.0e-3
-IMU.Frequency: 200.0
+IMU.NoiseGyro: 5.0e-4                # 陀螺仪白噪声密度，rad/s/√Hz；影响角速度观测的不确定度
+IMU.NoiseAcc: 5.0e-3                 # 加速度计白噪声密度，m/s²/√Hz；影响加速度观测的不确定度
+IMU.GyroWalk: 2.0e-5                 # 陀螺仪零偏随机游走强度，rad/s²/√Hz；影响零偏随时间变化的模型
+IMU.AccWalk: 1.0e-3                  # 加速度计零偏随机游走强度，m/s³/√Hz；影响零偏随时间变化的模型
+IMU.Frequency: 200.0                 # IMU标称采样率，单位Hz；用于将噪声密度换算成离散噪声参数
 
-# 刚失跟时不要强行插入关键帧，降低错误子地图扩张风险。
-IMU.InsertKFsWhenLost: 0
+IMU.InsertKFsWhenLost: 0             # 0：跟踪丢失时不采用该选项允许的额外关键帧插入策略；1：允许
 
-ORBextractor.nFeatures: 2000
-ORBextractor.scaleFactor: 1.2
-ORBextractor.nLevels: 8
-ORBextractor.iniThFAST: 20
-ORBextractor.minThFAST: 7
+# ===================== 5. ORB视觉特征提取 =====================
 
-Viewer.KeyFrameSize: 0.05
-Viewer.KeyFrameLineWidth: 1.0
-Viewer.GraphLineWidth: 0.9
-Viewer.PointSize: 2.0
-Viewer.CameraSize: 0.08
-Viewer.CameraLineWidth: 3.0
-Viewer.ViewpointX: 0.0
-Viewer.ViewpointY: -0.7
-Viewer.ViewpointZ: -1.8
-Viewer.ViewpointF: 500.0
+ORBextractor.nFeatures: 2000          # 每帧ORB特征点目标数量；增加不一定提高有效匹配或定位精度
+ORBextractor.scaleFactor: 1.2         # 图像金字塔相邻层缩放倍数；表示每往上一层，图像的宽度和高度约缩小为前一层的 1/1.2；控制相邻两层大小差异（控制相邻两层大小差异）
+ORBextractor.nLevels: 8               # 图像金字塔层数；
+ORBextractor.iniThFAST: 20            # 主要根据像素周围的亮度变化判断是否存在角点（阈值高：需要更明显的亮度差异才能被认为是角点）
+ORBextractor.minThFAST: 7             # 当检测不到角点时，回退的最低阈值
+
+# ===================== 6. Pangolin地图可视化 =====================
+
+Viewer.KeyFrameSize: 0.05             # 地图窗口中历史关键帧相机模型的绘制尺寸
+Viewer.KeyFrameLineWidth: 1.0         # 历史关键帧相机模型线条宽度
+Viewer.GraphLineWidth: 0.9            # 关键帧连接图的绘制线宽
+Viewer.PointSize: 2.0                 # 三维地图点的显示大小
+Viewer.CameraSize: 0.08               # 当前相机模型的绘制尺寸
+Viewer.CameraLineWidth: 3.0           # 当前相机模型的线条宽度
+Viewer.ViewpointX: 0.0                # 地图观察视角的初始X位置
+Viewer.ViewpointY: -0.7               # 地图观察视角的初始Y位置
+Viewer.ViewpointZ: -1.8               # 地图观察视角的初始Z位置
+Viewer.ViewpointF: 500.0              # Pangolin观察相机的投影焦距参数，影响显示透视效果

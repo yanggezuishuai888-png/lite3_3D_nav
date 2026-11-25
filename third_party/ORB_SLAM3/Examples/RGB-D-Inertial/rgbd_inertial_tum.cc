@@ -23,18 +23,85 @@
 
 #include <System.h>
 #include <ImuTypes.h>
+#include "offline_diagnostics.h"
 
 using namespace std;
 
 namespace
 {
 
-struct ImuSample
+using orb3_offline::ImuSample;
+
+const char* TrackingStateName(int state)
 {
-    double timestamp;
-    cv::Point3f gyro;
-    cv::Point3f acceleration;
+    switch(state)
+    {
+        case -1: return "SYSTEM_NOT_READY";
+        case 0: return "NO_IMAGES_YET";
+        case 1: return "NOT_INITIALIZED";
+        case 2: return "OK";
+        case 3: return "RECENTLY_LOST";
+        case 4: return "LOST";
+        case 5: return "OK_KLT";
+        default: return "UNKNOWN";
+    }
+}
+
+const char* SlamPhaseName(const ORB_SLAM3::System::DiagnosticSnapshot &snapshot)
+{
+    if(snapshot.inertial_ba2_done)
+        return "FULLY_INITIALIZED";
+    if(snapshot.inertial_ba1_done)
+        return "VIBA1_DONE";
+    if(snapshot.imu_initialized)
+        return "IMU_INITIALIZED";
+    if(snapshot.tracking_state == 0 || snapshot.tracking_state == 1)
+        return "BOOTSTRAP";
+    return "PREINERTIAL_TRACKING";
+}
+
+struct IntervalCoverage
+{
+    int count = 0;
+    double first_dt = numeric_limits<double>::quiet_NaN();
+    double last_dt = numeric_limits<double>::quiet_NaN();
+    double maximum_gap = numeric_limits<double>::quiet_NaN();
 };
+
+IntervalCoverage MeasureImuCoverage(const vector<ImuSample> &samples,
+                                    double start_time,
+                                    double end_time)
+{
+    IntervalCoverage coverage;
+    auto first = lower_bound(
+        samples.begin(), samples.end(), start_time,
+        [](const ImuSample &sample, double time) {
+            return sample.timestamp < time;
+        });
+    auto after_last = upper_bound(
+        samples.begin(), samples.end(), end_time,
+        [](double time, const ImuSample &sample) {
+            return time < sample.timestamp;
+        });
+    coverage.count = static_cast<int>(distance(first, after_last));
+    if(first != samples.end())
+        coverage.first_dt = first->timestamp - start_time;
+    if(after_last != samples.begin())
+        coverage.last_dt = end_time - (after_last - 1)->timestamp;
+
+    double maximum_gap = 0.0;
+    auto begin_gap = first == samples.begin() ? first : first - 1;
+    auto end_gap = after_last == samples.end() ? after_last : after_last + 1;
+    for(auto iterator = begin_gap; iterator != end_gap; ++iterator)
+    {
+        auto next = iterator + 1;
+        if(next == end_gap)
+            break;
+        maximum_gap = max(maximum_gap, next->timestamp - iterator->timestamp);
+    }
+    coverage.maximum_gap = maximum_gap;
+    return coverage;
+}
 
 bool ParseBool(const string &value)
 {
@@ -222,6 +289,24 @@ int main(int argc, char **argv)
         argv[1], argv[2], ORB_SLAM3::System::IMU_RGBD, use_viewer);
     const float image_scale = slam.GetImageScale();
 
+    ofstream frame_metrics("frame_metrics.csv");
+    ofstream events("events.csv");
+    if(!frame_metrics.is_open() || !events.is_open())
+    {
+        cerr << "Cannot create frame_metrics.csv or events.csv in the current directory." << endl;
+        slam.Shutdown();
+        return 1;
+    }
+    frame_metrics
+        << "frame_id,camera_timestamp,source_camera_timestamp,camera_time_offset_s,"
+        << "camera_dt_s,imu_count,imu_first_dt_s,imu_last_dt_s,imu_max_gap_s,"
+        << "tracking_time_ms,frame_deadline_missed,tracking_state,slam_phase,map_id,map_count,"
+        << "keyframes_in_map,map_points_in_map,imu_initialized,viba1_done,viba2_done,"
+        << "tracked_keypoints,tracked_map_points,matches_inliers\n";
+    events << "timestamp,frame_id,event,map_id,details\n";
+    frame_metrics << fixed << setprecision(9);
+    events << fixed << setprecision(9);
+
     auto first_after_initial_frame = upper_bound(
         imu_samples.begin(), imu_samples.end(), image_timestamps.front(),
         [](double timestamp, const ImuSample &sample) {
@@ -242,6 +327,8 @@ int main(int argc, char **argv)
     vector<ORB_SLAM3::IMU::Point> frame_imu;
     cv::Mat rgb;
     cv::Mat depth;
+    ORB_SLAM3::System::DiagnosticSnapshot previous_snapshot;
+    bool have_previous_snapshot = false;
 
     cout << "Start processing RGB-D-Inertial sequence ..." << endl;
     for(size_t image_index = 0; image_index < image_timestamps.size(); ++image_index)
@@ -304,6 +391,87 @@ int main(int argc, char **argv)
             chrono::duration_cast<chrono::duration<double>>(finish - start).count();
         tracking_times.push_back(static_cast<float>(tracking_time));
 
+        const double camera_dt = image_index == 0
+            ? numeric_limits<double>::quiet_NaN()
+            : image_timestamps[image_index] - image_timestamps[image_index - 1];
+        const IntervalCoverage coverage = image_index == 0
+            ? IntervalCoverage{}
+            : MeasureImuCoverage(imu_samples, image_timestamps[image_index - 1],
+                                 image_timestamps[image_index]);
+        const double source_timestamp =
+            orb3_offline::InferImageSourceTimestamp(rgb_paths[image_index]);
+        const double camera_offset = std::isfinite(source_timestamp)
+            ? image_timestamps[image_index] - source_timestamp
+            : numeric_limits<double>::quiet_NaN();
+        const ORB_SLAM3::System::DiagnosticSnapshot snapshot =
+            slam.GetDiagnosticSnapshot();
+        const bool missed_deadline = image_index > 0 && tracking_time > camera_dt;
+
+        frame_metrics
+            << image_index << ',' << image_timestamps[image_index] << ','
+            << source_timestamp << ',' << camera_offset << ',' << camera_dt << ','
+            << coverage.count << ',' << coverage.first_dt << ',' << coverage.last_dt << ','
+            << coverage.maximum_gap << ',' << tracking_time * 1000.0 << ','
+            << (missed_deadline ? 1 : 0) << ','
+            << TrackingStateName(snapshot.tracking_state) << ',' << SlamPhaseName(snapshot)
+            << ',' << snapshot.map_id << ','
+            << snapshot.map_count << ',' << snapshot.keyframes_in_map << ','
+            << snapshot.map_points_in_map << ',' << (snapshot.imu_initialized ? 1 : 0)
+            << ',' << (snapshot.inertial_ba1_done ? 1 : 0) << ','
+            << (snapshot.inertial_ba2_done ? 1 : 0) << ','
+            << snapshot.tracked_keypoints << ',' << snapshot.tracked_map_points << ','
+            << snapshot.matches_inliers << '\n';
+
+        if(!have_previous_snapshot)
+        {
+            events << image_timestamps[image_index] << ',' << image_index
+                   << ",RUN_START," << snapshot.map_id
+                   << ",state=" << TrackingStateName(snapshot.tracking_state) << '\n';
+        }
+        else
+        {
+            if(snapshot.tracking_state != previous_snapshot.tracking_state)
+                events << image_timestamps[image_index] << ',' << image_index
+                       << ",TRACKING_STATE_CHANGED," << snapshot.map_id << ','
+                       << TrackingStateName(previous_snapshot.tracking_state) << "->"
+                       << TrackingStateName(snapshot.tracking_state) << '\n';
+            if(string(SlamPhaseName(snapshot)) != string(SlamPhaseName(previous_snapshot)))
+                events << image_timestamps[image_index] << ',' << image_index
+                       << ",SLAM_PHASE_CHANGED," << snapshot.map_id << ','
+                       << SlamPhaseName(previous_snapshot) << "->"
+                       << SlamPhaseName(snapshot) << '\n';
+            if(snapshot.map_id != previous_snapshot.map_id)
+                events << image_timestamps[image_index] << ',' << image_index
+                       << ",ACTIVE_MAP_CHANGED," << snapshot.map_id << ','
+                       << previous_snapshot.map_id << "->" << snapshot.map_id << '\n';
+            if(snapshot.map_count > previous_snapshot.map_count)
+                events << image_timestamps[image_index] << ',' << image_index
+                       << ",MAP_CREATED," << snapshot.map_id << ",map_count="
+                       << snapshot.map_count << '\n';
+            if(!previous_snapshot.imu_initialized && snapshot.imu_initialized)
+                events << image_timestamps[image_index] << ',' << image_index
+                       << ",IMU_INITIALIZED," << snapshot.map_id << ",\n";
+            if(!previous_snapshot.inertial_ba1_done && snapshot.inertial_ba1_done)
+                events << image_timestamps[image_index] << ',' << image_index
+                       << ",VIBA1_DONE," << snapshot.map_id << ",\n";
+            if(!previous_snapshot.inertial_ba2_done && snapshot.inertial_ba2_done)
+                events << image_timestamps[image_index] << ',' << image_index
+                       << ",VIBA2_DONE," << snapshot.map_id << ",\n";
+            if(snapshot.map_id == previous_snapshot.map_id &&
+               previous_snapshot.keyframes_in_map > snapshot.keyframes_in_map + 2)
+                events << image_timestamps[image_index] << ',' << image_index
+                       << ",ACTIVE_MAP_RESET_INFERRED," << snapshot.map_id << ','
+                       << "keyframes=" << previous_snapshot.keyframes_in_map << "->"
+                       << snapshot.keyframes_in_map << '\n';
+        }
+        previous_snapshot = snapshot;
+        have_previous_snapshot = true;
+        if(image_index % 100 == 0)
+        {
+            frame_metrics.flush();
+            events.flush();
+        }
+
         if(realtime && image_index + 1 < image_timestamps.size())
         {
             const double frame_period =
@@ -314,7 +482,13 @@ int main(int argc, char **argv)
         }
     }
 
+    frame_metrics.flush();
+    events.flush();
     slam.Shutdown();
+    if(have_previous_snapshot)
+        events << image_timestamps.back() << ',' << (image_timestamps.size() - 1)
+               << ",RUN_END," << previous_snapshot.map_id << ",\n";
+    events.flush();
 
     if(tracking_times.empty())
     {
