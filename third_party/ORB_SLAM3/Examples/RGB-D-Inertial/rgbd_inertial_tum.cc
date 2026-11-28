@@ -68,6 +68,21 @@ struct IntervalCoverage
     double maximum_gap = numeric_limits<double>::quiet_NaN();
 };
 
+struct IntervalImuStats
+{
+    double mean_accel_x = numeric_limits<double>::quiet_NaN();
+    double mean_accel_y = numeric_limits<double>::quiet_NaN();
+    double mean_accel_z = numeric_limits<double>::quiet_NaN();
+    double mean_accel_norm = numeric_limits<double>::quiet_NaN();
+    double min_accel_norm = numeric_limits<double>::quiet_NaN();
+    double max_accel_norm = numeric_limits<double>::quiet_NaN();
+    double mean_gyro_x = numeric_limits<double>::quiet_NaN();
+    double mean_gyro_y = numeric_limits<double>::quiet_NaN();
+    double mean_gyro_z = numeric_limits<double>::quiet_NaN();
+    double mean_gyro_norm = numeric_limits<double>::quiet_NaN();
+    double max_gyro_norm = numeric_limits<double>::quiet_NaN();
+};
+
 IntervalCoverage MeasureImuCoverage(const vector<ImuSample> &samples,
                                     double start_time,
                                     double end_time)
@@ -101,6 +116,63 @@ IntervalCoverage MeasureImuCoverage(const vector<ImuSample> &samples,
     }
     coverage.maximum_gap = maximum_gap;
     return coverage;
+}
+
+IntervalImuStats MeasureImuStats(const vector<ImuSample> &samples,
+                                 double start_time,
+                                 double end_time)
+{
+    IntervalImuStats stats;
+    auto first = lower_bound(
+        samples.begin(), samples.end(), start_time,
+        [](const ImuSample &sample, double time) {
+            return sample.timestamp < time;
+        });
+    auto after_last = upper_bound(
+        samples.begin(), samples.end(), end_time,
+        [](double time, const ImuSample &sample) {
+            return time < sample.timestamp;
+        });
+    if(first == after_last)
+        return stats;
+
+    cv::Point3d accel_sum(0.0, 0.0, 0.0);
+    cv::Point3d gyro_sum(0.0, 0.0, 0.0);
+    double accel_norm_sum = 0.0;
+    double gyro_norm_sum = 0.0;
+    double min_accel_norm = numeric_limits<double>::infinity();
+    double max_accel_norm = 0.0;
+    double max_gyro_norm = 0.0;
+    size_t count = 0;
+    for(auto iterator = first; iterator != after_last; ++iterator)
+    {
+        const cv::Point3f &accel = iterator->acceleration;
+        const cv::Point3f &gyro = iterator->gyro;
+        const double accel_norm = cv::norm(accel);
+        const double gyro_norm = cv::norm(gyro);
+        accel_sum += cv::Point3d(accel.x, accel.y, accel.z);
+        gyro_sum += cv::Point3d(gyro.x, gyro.y, gyro.z);
+        accel_norm_sum += accel_norm;
+        gyro_norm_sum += gyro_norm;
+        min_accel_norm = min(min_accel_norm, accel_norm);
+        max_accel_norm = max(max_accel_norm, accel_norm);
+        max_gyro_norm = max(max_gyro_norm, gyro_norm);
+        ++count;
+    }
+
+    const double inverse_count = 1.0 / static_cast<double>(count);
+    stats.mean_accel_x = accel_sum.x * inverse_count;
+    stats.mean_accel_y = accel_sum.y * inverse_count;
+    stats.mean_accel_z = accel_sum.z * inverse_count;
+    stats.mean_accel_norm = accel_norm_sum * inverse_count;
+    stats.min_accel_norm = min_accel_norm;
+    stats.max_accel_norm = max_accel_norm;
+    stats.mean_gyro_x = gyro_sum.x * inverse_count;
+    stats.mean_gyro_y = gyro_sum.y * inverse_count;
+    stats.mean_gyro_z = gyro_sum.z * inverse_count;
+    stats.mean_gyro_norm = gyro_norm_sum * inverse_count;
+    stats.max_gyro_norm = max_gyro_norm;
+    return stats;
 }
 
 bool ParseBool(const string &value)
@@ -302,7 +374,16 @@ int main(int argc, char **argv)
         << "camera_dt_s,imu_count,imu_first_dt_s,imu_last_dt_s,imu_max_gap_s,"
         << "tracking_time_ms,frame_deadline_missed,tracking_state,slam_phase,map_id,map_count,"
         << "keyframes_in_map,map_points_in_map,imu_initialized,viba1_done,viba2_done,"
-        << "tracked_keypoints,tracked_map_points,matches_inliers\n";
+        << "tracked_keypoints,tracked_map_points,matches_inliers,"
+        << "body_pose_valid,body_x,body_y,body_z,body_qx,body_qy,body_qz,body_qw,"
+        << "velocity_valid,velocity_x,velocity_y,velocity_z,"
+        << "gyro_bias_x,gyro_bias_y,gyro_bias_z,accel_bias_x,accel_bias_y,accel_bias_z,"
+        << "preintegration_valid,preintegration_dt,delta_velocity_x,delta_velocity_y,"
+        << "delta_velocity_z,delta_position_x,delta_position_y,delta_position_z,"
+        << "inertial_scale,gravity_x,gravity_y,gravity_z,"
+        << "mean_accel_x,mean_accel_y,mean_accel_z,mean_accel_norm,min_accel_norm,"
+        << "max_accel_norm,mean_gyro_x,mean_gyro_y,mean_gyro_z,mean_gyro_norm,"
+        << "max_gyro_norm\n";
     events << "timestamp,frame_id,event,map_id,details\n";
     frame_metrics << fixed << setprecision(9);
     events << fixed << setprecision(9);
@@ -398,6 +479,10 @@ int main(int argc, char **argv)
             ? IntervalCoverage{}
             : MeasureImuCoverage(imu_samples, image_timestamps[image_index - 1],
                                  image_timestamps[image_index]);
+        const IntervalImuStats imu_stats = image_index == 0
+            ? IntervalImuStats{}
+            : MeasureImuStats(imu_samples, image_timestamps[image_index - 1],
+                              image_timestamps[image_index]);
         const double source_timestamp =
             orb3_offline::InferImageSourceTimestamp(rgb_paths[image_index]);
         const double camera_offset = std::isfinite(source_timestamp)
@@ -420,7 +505,30 @@ int main(int argc, char **argv)
             << ',' << (snapshot.inertial_ba1_done ? 1 : 0) << ','
             << (snapshot.inertial_ba2_done ? 1 : 0) << ','
             << snapshot.tracked_keypoints << ',' << snapshot.tracked_map_points << ','
-            << snapshot.matches_inliers << '\n';
+            << snapshot.matches_inliers << ','
+            << (snapshot.body_pose_valid ? 1 : 0) << ','
+            << snapshot.body_position_x << ',' << snapshot.body_position_y << ','
+            << snapshot.body_position_z << ',' << snapshot.body_quaternion_x << ','
+            << snapshot.body_quaternion_y << ',' << snapshot.body_quaternion_z << ','
+            << snapshot.body_quaternion_w << ','
+            << (snapshot.body_velocity_valid ? 1 : 0) << ','
+            << snapshot.velocity_x << ',' << snapshot.velocity_y << ','
+            << snapshot.velocity_z << ',' << snapshot.gyro_bias_x << ','
+            << snapshot.gyro_bias_y << ',' << snapshot.gyro_bias_z << ','
+            << snapshot.accel_bias_x << ',' << snapshot.accel_bias_y << ','
+            << snapshot.accel_bias_z << ','
+            << (snapshot.preintegration_valid ? 1 : 0) << ','
+            << snapshot.preintegration_dt << ',' << snapshot.delta_velocity_x << ','
+            << snapshot.delta_velocity_y << ',' << snapshot.delta_velocity_z << ','
+            << snapshot.delta_position_x << ',' << snapshot.delta_position_y << ','
+            << snapshot.delta_position_z << ',' << snapshot.inertial_scale << ','
+            << snapshot.gravity_x << ',' << snapshot.gravity_y << ','
+            << snapshot.gravity_z << ',' << imu_stats.mean_accel_x << ','
+            << imu_stats.mean_accel_y << ',' << imu_stats.mean_accel_z << ','
+            << imu_stats.mean_accel_norm << ',' << imu_stats.min_accel_norm << ','
+            << imu_stats.max_accel_norm << ',' << imu_stats.mean_gyro_x << ','
+            << imu_stats.mean_gyro_y << ',' << imu_stats.mean_gyro_z << ','
+            << imu_stats.mean_gyro_norm << ',' << imu_stats.max_gyro_norm << '\n';
 
         if(!have_previous_snapshot)
         {
@@ -460,7 +568,7 @@ int main(int argc, char **argv)
             if(snapshot.map_id == previous_snapshot.map_id &&
                previous_snapshot.keyframes_in_map > snapshot.keyframes_in_map + 2)
                 events << image_timestamps[image_index] << ',' << image_index
-                       << ",ACTIVE_MAP_RESET_INFERRED," << snapshot.map_id << ','
+                       << ",KEYFRAME_COUNT_DECREASED," << snapshot.map_id << ','
                        << "keyframes=" << previous_snapshot.keyframes_in_map << "->"
                        << snapshot.keyframes_in_map << '\n';
         }

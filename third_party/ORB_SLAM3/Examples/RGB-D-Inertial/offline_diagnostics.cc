@@ -218,6 +218,33 @@ VisualRotationResult VisualRotationEstimator::Estimate(
         for(int column = 0; column < 3; ++column)
             result.rotation_current_from_previous(row, column) =
                 rotation_cv.at<double>(row, column);
+    translation_vector.convertTo(translation_vector, CV_64F);
+    for(int row = 0; row < 3; ++row)
+        result.translation_current_from_previous(row) =
+            translation_vector.at<double>(row, 0);
+
+    result.camera_displacement_previous =
+        -result.rotation_current_from_previous.transpose() *
+        result.translation_current_from_previous;
+    result.camera_translation_norm = result.camera_displacement_previous.norm();
+
+    // Convert T_c2_c1 from solvePnP to T_b2_b1 using the configured camera
+    // to body transform, then invert its translation to obtain the motion of
+    // the current body origin expressed in the previous body frame.
+    const Eigen::Matrix3d rotation_body_current_from_body_previous =
+        calibration_.rotation_body_from_camera *
+        result.rotation_current_from_previous *
+        calibration_.rotation_body_from_camera.transpose();
+    const Eigen::Vector3d translation_body_current_from_body_previous =
+        calibration_.rotation_body_from_camera *
+        result.translation_current_from_previous +
+        calibration_.translation_body_from_camera -
+        rotation_body_current_from_body_previous *
+        calibration_.translation_body_from_camera;
+    result.body_displacement_previous =
+        -rotation_body_current_from_body_previous.transpose() *
+        translation_body_current_from_body_previous;
+    result.body_translation_norm = result.body_displacement_previous.norm();
     result.rotation_angle_deg = RotationAngleDegrees(
         result.rotation_current_from_previous);
     result.valid = result.inliers >= 30 && result.inlier_ratio >= 0.20 &&
@@ -266,9 +293,13 @@ bool LoadCalibration(const std::string &settings_path,
     }
     transform.convertTo(transform, CV_64F);
     for(int row = 0; row < 3; ++row)
+    {
         for(int column = 0; column < 3; ++column)
             calibration.rotation_body_from_camera(row, column) =
                 transform.at<double>(row, column);
+        calibration.translation_body_from_camera(row) =
+            transform.at<double>(row, 3);
+    }
     return true;
 }
 

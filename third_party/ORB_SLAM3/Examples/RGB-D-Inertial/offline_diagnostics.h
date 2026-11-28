@@ -24,6 +24,7 @@ struct Calibration
     cv::Mat camera_matrix;
     double depth_map_factor = 1000.0;
     Eigen::Matrix3d rotation_body_from_camera = Eigen::Matrix3d::Identity();
+    Eigen::Vector3d translation_body_from_camera = Eigen::Vector3d::Zero();
 };
 
 struct VisualRotationResult
@@ -39,6 +40,11 @@ struct VisualRotationResult
     double reprojection_rmse_px = std::numeric_limits<double>::quiet_NaN();
     double rotation_angle_deg = std::numeric_limits<double>::quiet_NaN();
     Eigen::Matrix3d rotation_current_from_previous = Eigen::Matrix3d::Identity();
+    Eigen::Vector3d translation_current_from_previous = Eigen::Vector3d::Zero();
+    Eigen::Vector3d camera_displacement_previous = Eigen::Vector3d::Zero();
+    Eigen::Vector3d body_displacement_previous = Eigen::Vector3d::Zero();
+    double camera_translation_norm = std::numeric_limits<double>::quiet_NaN();
+    double body_translation_norm = std::numeric_limits<double>::quiet_NaN();
 };
 
 struct ImuIntegrationResult

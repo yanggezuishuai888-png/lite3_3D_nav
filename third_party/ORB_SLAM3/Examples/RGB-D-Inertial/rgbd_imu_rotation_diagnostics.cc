@@ -127,6 +127,9 @@ int main(int argc, char **argv)
            << "imu_max_gap_s,features_previous,features_current,ratio_matches,"
            << "depth_matches,visual_inliers,inlier_ratio,occupied_cells,"
            << "reprojection_rmse_px,visual_valid,visual_rotation_deg,"
+           << "pnp_tx,pnp_ty,pnp_tz,camera_dx_previous,camera_dy_previous,"
+           << "camera_dz_previous,camera_translation_norm,body_dx_previous,"
+           << "body_dy_previous,body_dz_previous,body_translation_norm,"
            << "imu_rotation_deg,residual_valid,residual_roll_deg,"
            << "residual_pitch_deg,residual_yaw_deg,rotation_residual_deg,"
            << "gyro_bias_x,gyro_bias_y,gyro_bias_z\n";
@@ -183,7 +186,18 @@ int main(int argc, char **argv)
             << visual.depth_matches << ',' << visual.inliers << ','
             << visual.inlier_ratio << ',' << visual.occupied_cells << ','
             << visual.reprojection_rmse_px << ',' << (visual.valid ? 1 : 0) << ','
-            << visual.rotation_angle_deg << ',' << imu.rotation_angle_deg << ','
+            << visual.rotation_angle_deg << ','
+            << visual.translation_current_from_previous.x() << ','
+            << visual.translation_current_from_previous.y() << ','
+            << visual.translation_current_from_previous.z() << ','
+            << visual.camera_displacement_previous.x() << ','
+            << visual.camera_displacement_previous.y() << ','
+            << visual.camera_displacement_previous.z() << ','
+            << visual.camera_translation_norm << ','
+            << visual.body_displacement_previous.x() << ','
+            << visual.body_displacement_previous.y() << ','
+            << visual.body_displacement_previous.z() << ','
+            << visual.body_translation_norm << ',' << imu.rotation_angle_deg << ','
             << (residual.valid ? 1 : 0) << ',' << residual.roll_deg << ','
             << residual.pitch_deg << ',' << residual.yaw_deg << ','
             << residual.angle_deg << ',' << gyro_bias.x() << ',' << gyro_bias.y()

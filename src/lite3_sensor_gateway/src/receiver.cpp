@@ -515,6 +515,11 @@ public:
     images_.reset(new Socket(bind, ip));
     auto sensor = rclcpp::SensorDataQoS().keep_last(5);
     auto reliable = rclcpp::QoS(1).reliable();
+    const auto motion_qos_depth = declare_parameter<int>("motion_qos_depth", 200);
+    if (motion_qos_depth < 10 || motion_qos_depth > 2000)
+      throw std::runtime_error("motion_qos_depth must be 10..2000");
+    auto motion_qos =
+        rclcpp::QoS(rclcpp::KeepLast(motion_qos_depth)).reliable();
     const auto image_qos_depth = declare_parameter<int>("image_qos_depth", 10);
     if (image_qos_depth < 1 || image_qos_depth > 100)
       throw std::runtime_error("image_qos_depth must be 1..100");
@@ -529,8 +534,11 @@ public:
       image_qos.reliable();
       rgbd_image_qos.reliable();
     }
-    imu_ = create_publisher<sensor_msgs::msg::Imu>(prefix_ + "/imu/data", sensor);
-    odom_ = create_publisher<nav_msgs::msg::Odometry>(prefix_ + "/leg_odom2", sensor);
+    // Motion fusion consumes every sample. Keep these publishers reliable and
+    // independently buffered; image/current-state topics remain low-latency
+    // Best Effort streams.
+    imu_ = create_publisher<sensor_msgs::msg::Imu>(prefix_ + "/imu/data", motion_qos);
+    odom_ = create_publisher<nav_msgs::msg::Odometry>(prefix_ + "/leg_odom2", motion_qos);
     handle_ = create_publisher<geometry_msgs::msg::Twist>(prefix_ + "/handle_state", sensor);
     ultrasound_ =
         create_publisher<std_msgs::msg::Float64>(prefix_ + "/ultrasound_distance", sensor);
@@ -563,8 +571,8 @@ public:
     status_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] { report(); });
     RCLCPP_WARN(
         get_logger(),
-        "Read-only receiver; timestamp_policy=%s camera_timestamp_policy=%s; fusion gated by clock quality",
-        policy.c_str(), camera_policy.c_str());
+        "Read-only receiver; timestamp_policy=%s camera_timestamp_policy=%s; motion_qos=Reliable/KeepLast(%d); fusion gated by clock quality",
+        policy.c_str(), camera_policy.c_str(), static_cast<int>(motion_qos_depth));
   }
 };
 } // namespace
